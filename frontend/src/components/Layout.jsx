@@ -1,13 +1,23 @@
+const PuzzleIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+    <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
+    <line x1="7" y1="7" x2="7.01" y2="7" />
+  </svg>
+);
+
+const HamburgerIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+
 const TAB_ITEMS = [
   {
     id: 'extensions',
     label: 'Extensions',
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-        <path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3z" />
-        <path d="M17.5 14v3.5H14V21h3.5v-3.5H21V14z" />
-      </svg>
-    ),
+    icon: null, // resolved dynamically based on active state
   },
   {
     id: 'editor',
@@ -50,13 +60,23 @@ export default function Layout({ activeTab, onTabChange, children }) {
         {children}
       </main>
 
-      {/* Bottom Navigation Bar */}
+      {/* Bottom Navigation Bar — glassmorphism, iOS safe area */}
       <nav
-        className="flex shrink-0 border-t border-vscode-border"
-        style={{ backgroundColor: 'var(--color-vscode-nav)' }}
+        className="flex shrink-0"
+        style={{
+          backgroundColor: 'rgba(30, 30, 30, 0.85)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
       >
         {TAB_ITEMS.map((tab) => {
           const isActive = activeTab === tab.id;
+          let icon = tab.icon;
+          if (tab.id === 'extensions') {
+            icon = isActive ? <HamburgerIcon /> : <PuzzleIcon />;
+          }
           return (
             <button
               key={tab.id}
@@ -70,7 +90,7 @@ export default function Layout({ activeTab, onTabChange, children }) {
               aria-label={tab.label}
               aria-current={isActive ? 'page' : undefined}
             >
-              {tab.icon}
+              {icon}
               <span className="text-[10px] leading-tight">{tab.label}</span>
             </button>
           );
