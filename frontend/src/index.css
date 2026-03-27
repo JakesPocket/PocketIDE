@@ -1,13 +1,16 @@
 @import "tailwindcss";
 
 @theme {
-  --color-vscode-bg: #1e1e1e;
-  --color-vscode-nav: #252526;
-  --color-vscode-sidebar: #333333;
+  --color-vscode-bg: #0d0d0f;
+  --color-vscode-nav: #131315;
+  --color-vscode-sidebar: #1c1c1f;
+  --color-vscode-sidebar-hover: #252528;
   --color-vscode-accent: #007acc;
-  --color-vscode-text: #cccccc;
-  --color-vscode-text-muted: #858585;
-  --color-vscode-border: #3c3c3c;
+  --color-vscode-accent-dim: rgba(0, 122, 204, 0.15);
+  --color-vscode-text: #d4d4d4;
+  --color-vscode-text-muted: #6a6a6a;
+  --color-vscode-border: #2a2a2d;
+  --color-vscode-tab-active: #1e1e1e;
 }
 
 *,
@@ -31,4 +34,13 @@ body {
   height: 100dvh;
   display: flex;
   flex-direction: column;
+}
+
+/* Hide scrollbars on tab bars while keeping scroll */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
