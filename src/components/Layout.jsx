@@ -1,22 +1,14 @@
 import { useEffect, useState } from 'react';
 
-// Tracks the visual viewport height so the layout shrinks when the on-screen
-// keyboard appears, keeping the nav bar pinned just above the keyboard.
-function useVisualViewportHeight() {
-  const [height, setHeight] = useState(
-    () => (typeof window !== 'undefined' ? (window.visualViewport?.height ?? window.innerHeight) : 0),
-  );
+// Keep layout height fixed to window.innerHeight so keyboard open/close does
+// not apply keyboard-based viewport padding behavior.
+function useAppViewportHeight() {
+  const [height, setHeight] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 0));
 
   useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const update = () => setHeight(vv.height);
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    return () => {
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
-    };
+    const update = () => setHeight(window.innerHeight);
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
   }, []);
 
   return height;
@@ -95,19 +87,19 @@ function TabIcon({ id, isActive }) {
 }
 
 export default function Layout({ activeTab, onTabChange, children }) {
-  const vpHeight = useVisualViewportHeight();
+  const vpHeight = useAppViewportHeight();
+  const navBottomOffsetPx = 24;
+  const viewportExtraPx = 28;
 
   return (
-    <div className="flex flex-col overflow-hidden" style={{ height: `${vpHeight}px` }}>
-      {/* Top safe-area spacer — expands to the device's notch/Dynamic Island height,
-          zero on devices without one. Uses height (not padding) so no element's
-          own box size is affected. shrink-0 prevents flex from collapsing it. */}
-      <div
-        aria-hidden="true"
-        className="shrink-0 w-full"
-        style={{ height: 'env(safe-area-inset-top)' }}
-      />
-
+    <div
+      className="flex flex-col overflow-hidden"
+      style={{
+        height: `${vpHeight + viewportExtraPx}px`,
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        borderBottom: '1px solid #ffffff',
+      }}
+    >
       {/* Main content — leave room for the nav bar via padding so nothing hides under it */}
       <main className="flex-1 overflow-hidden">
         {children}
@@ -121,7 +113,9 @@ export default function Layout({ activeTab, onTabChange, children }) {
           backdropFilter: 'blur(20px) saturate(180%)',
           WebkitBackdropFilter: 'blur(20px) saturate(180%)',
           borderTop: '1px solid rgba(255,255,255,0.06)',
-          paddingBottom: 'env(safe-area-inset-bottom)',
+          // Use a fixed downward nudge instead of safe-area bottom padding.
+          marginBottom: `-${navBottomOffsetPx}px`,
+          paddingBottom: 0,
         }}
         className="flex shrink-0"
       >

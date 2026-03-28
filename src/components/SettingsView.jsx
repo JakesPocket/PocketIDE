@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
 import { apiUrl } from '../config/server';
+import { readText, writeText } from '../utils/persist';
+
+const CHAT_UI_AGENT_KEY = 'pocketide.chat.ui.agent.v1';
+const CHAT_UI_MODEL_KEY = 'pocketide.chat.ui.model.v1';
+const CHAT_UI_EXEC_MODE_KEY = 'pocketide.chat.ui.execMode.v1';
+const CHAT_UI_APPROVAL_KEY = 'pocketide.chat.ui.approval.v1';
 
 export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
   const [workspacePath, setWorkspacePath] = useState(null);
@@ -8,6 +14,10 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
   const [error, setError] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [chatAgentLabel, setChatAgentLabel] = useState(() => readText(CHAT_UI_AGENT_KEY, 'Agent'));
+  const [chatModelLabel, setChatModelLabel] = useState(() => readText(CHAT_UI_MODEL_KEY, 'Auto'));
+  const [chatExecModeLabel, setChatExecModeLabel] = useState(() => readText(CHAT_UI_EXEC_MODE_KEY, 'Local'));
+  const [chatApprovalLabel, setChatApprovalLabel] = useState(() => readText(CHAT_UI_APPROVAL_KEY, 'Default Approvals'));
 
   useEffect(() => {
     fetch(apiUrl('/api/workspace'))
@@ -81,6 +91,11 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
 
     return () => window.clearTimeout(timer);
   }, [changing, inputPath]);
+
+  useEffect(() => { writeText(CHAT_UI_AGENT_KEY, chatAgentLabel); }, [chatAgentLabel]);
+  useEffect(() => { writeText(CHAT_UI_MODEL_KEY, chatModelLabel); }, [chatModelLabel]);
+  useEffect(() => { writeText(CHAT_UI_EXEC_MODE_KEY, chatExecModeLabel); }, [chatExecModeLabel]);
+  useEffect(() => { writeText(CHAT_UI_APPROVAL_KEY, chatApprovalLabel); }, [chatApprovalLabel]);
 
   function handlePickSuggestion(nextPath) {
     setInputPath(nextPath);
@@ -196,6 +211,72 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
             >
               Clear
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* AI Chat Controls section */}
+      <div className="mt-6">
+        <p className="text-[11px] uppercase tracking-widest text-vscode-text-muted mb-3 px-1">
+          AI Chat Controls
+        </p>
+        <div className="rounded-xl border border-vscode-border overflow-hidden" style={{ backgroundColor: 'rgba(255,255,255,0.04)' }}>
+          <div className="px-4 py-3 border-b border-vscode-border">
+            <p className="text-sm text-vscode-text font-medium">Top Bar Mode</p>
+            <p className="text-xs text-vscode-text-muted mt-0.5">Controls what label appears in the first control row.</p>
+            <select
+              value={chatAgentLabel}
+              onChange={(e) => setChatAgentLabel(e.target.value)}
+              className="mt-2 w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
+              style={{ outline: 'none' }}
+            >
+              <option value="Agent">Agent</option>
+              <option value="Chat">Chat</option>
+              <option value="Assist">Assist</option>
+            </select>
+          </div>
+
+          <div className="px-4 py-3 border-b border-vscode-border">
+            <p className="text-sm text-vscode-text font-medium">Model Selector Label</p>
+            <select
+              value={chatModelLabel}
+              onChange={(e) => setChatModelLabel(e.target.value)}
+              className="mt-2 w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
+              style={{ outline: 'none' }}
+            >
+              <option value="Auto">Auto</option>
+              <option value="Balanced">Balanced</option>
+              <option value="Fast">Fast</option>
+              <option value="Quality">Quality</option>
+            </select>
+          </div>
+
+          <div className="px-4 py-3 border-b border-vscode-border">
+            <p className="text-sm text-vscode-text font-medium">Execution Mode Label</p>
+            <select
+              value={chatExecModeLabel}
+              onChange={(e) => setChatExecModeLabel(e.target.value)}
+              className="mt-2 w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
+              style={{ outline: 'none' }}
+            >
+              <option value="Local">Local</option>
+              <option value="Copilot CLI">Copilot CLI</option>
+              <option value="Cloud">Cloud</option>
+            </select>
+          </div>
+
+          <div className="px-4 py-3">
+            <p className="text-sm text-vscode-text font-medium">Approval Policy Label</p>
+            <select
+              value={chatApprovalLabel}
+              onChange={(e) => setChatApprovalLabel(e.target.value)}
+              className="mt-2 w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
+              style={{ outline: 'none' }}
+            >
+              <option value="Default Approvals">Default Approvals</option>
+              <option value="Ask Every Time">Ask Every Time</option>
+              <option value="Auto Approve Safe">Auto Approve Safe</option>
+            </select>
           </div>
         </div>
       </div>
