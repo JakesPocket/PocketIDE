@@ -161,40 +161,24 @@ function GitSection({ title, files, action, actionLabel, busy }) {
   );
 }
 
-function GitView() {
-  const [repos, setRepos] = useState([]);
-  const [selectedRepo, setSelectedRepo] = useState('.');
+function RepoGitPanel({ repo, isExpanded, onToggle }) {
   const [gitStatus, setGitStatus] = useState(null);
   const [branches, setBranches] = useState([]);
   const [showBranchPicker, setShowBranchPicker] = useState(false);
   const [pendingBranchSwitch, setPendingBranchSwitch] = useState(null);
+  const [createBranchMode, setCreateBranchMode] = useState(null);
+  const [newBranchName, setNewBranchName] = useState('');
+  const [fromRef, setFromRef] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [commitMsg, setCommitMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState('');
 
-  const fetchRepos = useCallback(() => {
-    fetch(apiUrl('/api/git/repos'))
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
-        const list = Array.isArray(data.repos) ? data.repos : [];
-        setRepos(list);
-        if (!list.some((repo) => repo.id === selectedRepo)) {
-          setSelectedRepo(list[0]?.id || '.');
-        }
-      })
-      .catch(() => setRepos([]));
-  }, [selectedRepo]);
-
   const fetchStatus = useCallback(() => {
     setLoading(true);
     setError(null);
-    const query = selectedRepo ? `?repo=${encodeURIComponent(selectedRepo)}` : '';
-    fetch(apiUrl(`/api/git/status${query}`))
+    fetch(apiUrl(`/api/git/status?repo=${encodeURIComponent(repo.id)}`))
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
@@ -202,27 +186,23 @@ function GitView() {
       .then((data) => setGitStatus(data))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [selectedRepo]);
+  }, [repo.id]);
 
   const fetchBranches = useCallback(() => {
-    const query = selectedRepo ? `?repo=${encodeURIComponent(selectedRepo)}` : '';
-    fetch(apiUrl(`/api/git/branches${query}`))
+    fetch(apiUrl(`/api/git/branches?repo=${encodeURIComponent(repo.id)}`))
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
       })
       .then((data) => setBranches(Array.isArray(data.branches) ? data.branches : []))
       .catch(() => setBranches([]));
-  }, [selectedRepo]);
+  }, [repo.id]);
 
   useEffect(() => {
-    fetchRepos();
-  }, [fetchRepos]);
-
-  useEffect(() => {
+    if (!isExpanded && gitStatus) return;
     fetchStatus();
     fetchBranches();
-  }, [fetchStatus, fetchBranches]);
+  }, [isExpanded, gitStatus, fetchStatus, fetchBranches]);
 
   async function gitAction(endpoint, body = {}) {
     setBusy(true);
@@ -231,18 +211,17 @@ function GitView() {
       const r = await fetch(apiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, repo: selectedRepo }),
+        body: JSON.stringify({ ...body, repo: repo.id }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         setActionMsg(data.error || `Failed (${r.status})`);
         return false;
-      } else {
-        if (data.output) setActionMsg(data.output);
-        fetchStatus();
-        fetchBranches();
-        return true;
       }
+      if (data.output) setActionMsg(data.output);
+      fetchStatus();
+      fetchBranches();
+      return true;
     } catch (e) {
       setActionMsg(e.message);
       return false;
@@ -251,13 +230,6 @@ function GitView() {
     }
   }
 
-  async function handleStageAll() { await gitAction('/api/git/stage', { all: true }); }
-  async function handleUnstageAll() { await gitAction('/api/git/unstage', { all: true }); }
-  async function handleCommit() {
-    if (!commitMsg.trim()) return;
-    await gitAction('/api/git/commit', { message: commitMsg });
-    setCommitMsg('');
-  }
   async function handleGenerateCommitMessage() {
     setBusy(true);
     setActionMsg('');
@@ -265,7 +237,7 @@ function GitView() {
       const r = await fetch(apiUrl('/api/git/generate-commit-message'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: selectedRepo }),
+        body: JSON.stringify({ repo: repo.id }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -274,7 +246,7 @@ function GitView() {
       }
       if (typeof data.message === 'string' && data.message.trim()) {
         setCommitMsg(data.message.trim());
-        setActionMsg(data.source === 'ai' ? 'Generated commit message with AI.' : 'Generated commit message.');
+        setActionMsg('Generated commit message with AI.');
       }
     } catch (e) {
       setActionMsg(e.message);
@@ -282,8 +254,6 @@ function GitView() {
       setBusy(false);
     }
   }
-  async function handlePush() { await gitAction('/api/git/push'); }
-  async function handlePull() { await gitAction('/api/git/pull'); }
 
   async function switchBranch(targetBranch, strategy = null, remote = false) {
     setBusy(true);
@@ -292,28 +262,21 @@ function GitView() {
       const r = await fetch(apiUrl('/api/git/checkout'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ branch: targetBranch, remote, repo: selectedRepo, ...(strategy ? { strategy } : {}) }),
+        body: JSON.stringify({ branch: targetBranch, remote, repo: repo.id, ...(strategy ? { strategy } : {}) }),
       });
       const data = await r.json().catch(() => ({}));
-
       if (r.status === 409 && data?.conflict) {
         setPendingBranchSwitch({ branch: targetBranch, remote });
         setActionMsg('This branch switch needs a strategy: Stash or Discard changes.');
         return;
       }
-
       if (!r.ok) {
         setActionMsg(data.error || `Failed (${r.status})`);
         return;
       }
-
       setPendingBranchSwitch(null);
       setShowBranchPicker(false);
-      if (data.warning) {
-        setActionMsg(data.warning);
-      } else {
-        setActionMsg(data.output || `Switched to ${targetBranch}`);
-      }
+      setActionMsg(data.warning || data.output || `Switched to ${targetBranch}`);
       fetchStatus();
       fetchBranches();
     } catch (e) {
@@ -323,355 +286,354 @@ function GitView() {
     }
   }
 
-  async function handleSelectBranch(target) {
-    if (!target?.fullName) return;
-
-    const targetBranch = target.fullName;
-    const isCurrentLocal = !target.remote && target.name === gitStatus?.branch;
-    if (isCurrentLocal) {
-      setShowBranchPicker(false);
+  async function handleCreateBranch(localBranches, remoteBranches, currentBranch) {
+    const name = newBranchName.trim();
+    if (!name) {
+      setActionMsg('Branch name is required.');
       return;
     }
-
-    const hasUncommitted = (gitStatus?.staged?.length || 0) + (gitStatus?.unstaged?.length || 0) + (gitStatus?.untracked?.length || 0) > 0;
-    if (hasUncommitted) {
-      setPendingBranchSwitch({ branch: targetBranch, remote: Boolean(target.remote) });
+    setBusy(true);
+    setActionMsg('');
+    try {
+      const r = await fetch(apiUrl('/api/git/branch/create'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo: repo.id,
+          name,
+          ...(createBranchMode === 'from' && (fromRef || currentBranch) ? { from: fromRef || currentBranch } : {}),
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setActionMsg(data.error || `Failed (${r.status})`);
+        return;
+      }
+      setActionMsg(data.output || `Created and switched to ${name}`);
+      setCreateBranchMode(null);
+      setNewBranchName('');
+      setFromRef('');
       setShowBranchPicker(false);
-      return;
+      fetchStatus();
+      fetchBranches();
+    } catch (e) {
+      setActionMsg(e.message);
+    } finally {
+      setBusy(false);
     }
+  }
 
-    await switchBranch(targetBranch, null, Boolean(target.remote));
+  const branchLabel = gitStatus?.branch || 'No branch';
+  const ahead = gitStatus?.ahead || 0;
+  const behind = gitStatus?.behind || 0;
+  const changedCount = (gitStatus?.staged?.length || 0) + (gitStatus?.unstaged?.length || 0) + (gitStatus?.untracked?.length || 0);
+
+  return (
+    <div className="border-b border-vscode-border">
+      <button
+        onClick={onToggle}
+        className="w-full px-3 py-2.5 flex items-center justify-between text-left hover:bg-vscode-sidebar-hover"
+        style={{ background: 'transparent', border: 'none', outline: 'none' }}
+      >
+        <div className="min-w-0">
+          <div className="text-sm text-vscode-text truncate">{repo.name}</div>
+          <div className="text-[11px] text-vscode-text-muted">
+            {branchLabel}{ahead > 0 ? `  ↑${ahead}` : ''}{behind > 0 ? `  ↓${behind}` : ''}{changedCount > 0 ? `  • ${changedCount} changes` : ''}
+          </div>
+        </div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round"
+          className={`w-4 h-4 text-vscode-text-muted transition-transform ${isExpanded ? 'rotate-180' : ''}`}>
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      {!isExpanded && null}
+      {isExpanded && loading && (
+        <div className="px-3 py-3 text-sm text-vscode-text-muted">Loading...</div>
+      )}
+      {isExpanded && error && (
+        <div className="px-3 py-3 text-sm text-red-400">Error: {error}</div>
+      )}
+      {isExpanded && !loading && !error && gitStatus?.branch && (() => {
+        const { branch, staged, unstaged, untracked } = gitStatus;
+        const localBranches = branches.filter((b) => !b.remote);
+        const remoteBranches = branches.filter((b) => b.remote);
+        const hasChanges = staged.length + unstaged.length + untracked.length > 0;
+        const canCommit = staged.length > 0 && commitMsg.trim().length > 0;
+        const hasMessage = commitMsg.trim().length > 0;
+        return (
+          <div>
+            <div className="flex items-center justify-between px-3 py-2 border-t border-vscode-border">
+              <button
+                onClick={() => {
+                  fetchBranches();
+                  setShowBranchPicker((v) => !v);
+                }}
+                disabled={busy}
+                className="text-sm text-vscode-text hover:text-white disabled:opacity-40"
+                style={{ background: 'none', border: 'none', outline: 'none' }}
+              >
+                {branch} {showBranchPicker ? '▲' : '▼'}
+              </button>
+              <button
+                onClick={fetchStatus}
+                disabled={busy}
+                className="text-vscode-text-muted hover:text-vscode-text"
+                style={{ background: 'none', border: 'none', outline: 'none' }}
+              >
+                Refresh
+              </button>
+            </div>
+
+            {showBranchPicker && (
+              <div className="px-3 py-2 border-t border-vscode-border bg-vscode-sidebar">
+                <div className="flex flex-col gap-1 mb-2">
+                  <button
+                    onClick={() => { setCreateBranchMode('new'); setNewBranchName(''); setFromRef(branch); }}
+                    disabled={busy}
+                    className="text-left px-2 py-1.5 rounded text-xs border border-vscode-border text-vscode-text-muted hover:text-vscode-text"
+                    style={{ outline: 'none', background: 'transparent' }}
+                  >
+                    + Create new branch...
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCreateBranchMode('from');
+                      setNewBranchName('');
+                      setFromRef(branch || localBranches[0]?.fullName || remoteBranches[0]?.fullName || '');
+                    }}
+                    disabled={busy}
+                    className="text-left px-2 py-1.5 rounded text-xs border border-vscode-border text-vscode-text-muted hover:text-vscode-text"
+                    style={{ outline: 'none', background: 'transparent' }}
+                  >
+                    + Create new branch from...
+                  </button>
+                </div>
+
+                {createBranchMode && (
+                  <div className="mb-2 p-2 rounded border border-vscode-border bg-vscode-bg flex flex-col gap-2">
+                    <input
+                      value={newBranchName}
+                      onChange={(e) => setNewBranchName(e.target.value)}
+                      placeholder="new-branch-name"
+                      className="w-full px-2 py-1.5 rounded border border-vscode-border bg-vscode-sidebar text-xs text-vscode-text"
+                      style={{ outline: 'none' }}
+                    />
+                    {createBranchMode === 'from' && (
+                      <select
+                        value={fromRef}
+                        onChange={(e) => setFromRef(e.target.value)}
+                        className="w-full px-2 py-1.5 rounded border border-vscode-border bg-vscode-sidebar text-xs text-vscode-text"
+                        style={{ outline: 'none' }}
+                      >
+                        {[...localBranches, ...remoteBranches].map((b) => (
+                          <option key={`from:${b.fullName}`} value={b.fullName}>{b.fullName}</option>
+                        ))}
+                      </select>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleCreateBranch(localBranches, remoteBranches, branch)}
+                        disabled={busy || !newBranchName.trim()}
+                        className="flex-1 py-1.5 rounded text-xs border border-vscode-border text-vscode-text disabled:opacity-40"
+                        style={{ background: 'transparent', outline: 'none' }}
+                      >
+                        Create &amp; Switch
+                      </button>
+                      <button
+                        onClick={() => { setCreateBranchMode(null); setNewBranchName(''); setFromRef(''); }}
+                        disabled={busy}
+                        className="px-2 py-1.5 rounded text-xs border border-vscode-border text-vscode-text-muted"
+                        style={{ background: 'transparent', outline: 'none' }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-1">
+                  {localBranches.length > 0 && <p className="text-[10px] uppercase tracking-wider text-vscode-text-muted px-1 pt-1">Local branches</p>}
+                  {localBranches.map((b) => (
+                    <button
+                      key={`local:${b.fullName}`}
+                      onClick={async () => {
+                        const hasUncommitted = staged.length + unstaged.length + untracked.length > 0;
+                        if (hasUncommitted && !b.current) {
+                          setPendingBranchSwitch({ branch: b.fullName, remote: false });
+                          setShowBranchPicker(false);
+                          return;
+                        }
+                        if (!b.current) await switchBranch(b.fullName, null, false);
+                        setShowBranchPicker(false);
+                      }}
+                      disabled={busy || b.current}
+                      className="text-left px-2 py-1.5 rounded text-xs border border-vscode-border text-vscode-text-muted hover:text-vscode-text disabled:opacity-60"
+                      style={{ outline: 'none', background: 'transparent' }}
+                    >
+                      {b.name}{b.current ? ' (Current)' : ''}
+                    </button>
+                  ))}
+
+                  {remoteBranches.length > 0 && <p className="text-[10px] uppercase tracking-wider text-vscode-text-muted px-1 pt-2">Remote branches</p>}
+                  {remoteBranches.map((b) => (
+                    <button
+                      key={`remote:${b.fullName}`}
+                      onClick={async () => {
+                        const hasUncommitted = staged.length + unstaged.length + untracked.length > 0;
+                        if (hasUncommitted) {
+                          setPendingBranchSwitch({ branch: b.fullName, remote: true });
+                          setShowBranchPicker(false);
+                          return;
+                        }
+                        await switchBranch(b.fullName, null, true);
+                        setShowBranchPicker(false);
+                      }}
+                      disabled={busy}
+                      className="text-left px-2 py-1.5 rounded text-xs border border-vscode-border text-vscode-text-muted hover:text-vscode-text"
+                      style={{ outline: 'none', background: 'transparent' }}
+                    >
+                      {b.fullName}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {pendingBranchSwitch && (
+              <div className="px-3 py-2 border-t border-vscode-border bg-vscode-sidebar">
+                <p className="text-xs text-vscode-text-muted mb-2">
+                  Uncommitted changes detected before switching to <span className="text-vscode-text">{pendingBranchSwitch.branch}</span>.
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={() => switchBranch(pendingBranchSwitch.branch, 'stash', pendingBranchSwitch.remote)} disabled={busy}
+                    className="flex-1 py-1.5 rounded text-xs border border-vscode-border text-vscode-text" style={{ background: 'transparent', outline: 'none' }}>
+                    Stash &amp; Switch
+                  </button>
+                  <button onClick={() => switchBranch(pendingBranchSwitch.branch, 'force', pendingBranchSwitch.remote)} disabled={busy}
+                    className="flex-1 py-1.5 rounded text-xs border border-vscode-border text-red-300" style={{ background: 'transparent', outline: 'none' }}>
+                    Discard &amp; Switch
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto">
+              {!hasChanges && <p className="px-3 py-4 text-sm text-vscode-text-muted">No changes.</p>}
+              <GitSection title="Staged" files={staged} action={staged.length ? () => gitAction('/api/git/unstage', { all: true }) : null} actionLabel="Unstage all" busy={busy} />
+              <GitSection title="Changes" files={unstaged} action={unstaged.length ? () => gitAction('/api/git/stage', { all: true }) : null} actionLabel="Stage all" busy={busy} />
+              <GitSection title="Untracked" files={untracked} action={untracked.length ? () => gitAction('/api/git/stage', { all: true }) : null} actionLabel="Stage all" busy={busy} />
+
+              {staged.length > 0 && (
+                <div className="px-3 pt-3 pb-2 border-t border-vscode-border mt-1">
+                  <div className="mb-2.5 p-2 rounded border border-vscode-border bg-vscode-sidebar">
+                    <div className="text-[11px] uppercase tracking-wider text-vscode-text-muted mb-1.5">Commit flow</div>
+                    <div className="grid grid-cols-3 gap-2 text-[11px]">
+                      <div className="rounded border px-2 py-1 border-vscode-border text-vscode-text"><div className="font-medium">1. Stage</div><div className="text-vscode-text-muted">{staged.length} staged</div></div>
+                      <div className={['rounded border px-2 py-1', hasMessage ? 'border-green-500/40 text-vscode-text' : 'border-vscode-border text-vscode-text-muted'].join(' ')}><div className="font-medium">2. Message</div><div>{hasMessage ? 'ready' : 'required'}</div></div>
+                      <div className={['rounded border px-2 py-1', canCommit ? 'border-green-500/40 text-vscode-text' : 'border-vscode-border text-vscode-text-muted'].join(' ')}><div className="font-medium">3. Commit</div><div>{canCommit ? 'ready' : 'blocked'}</div></div>
+                    </div>
+                  </div>
+                  <div className="flex justify-end mb-1">
+                    <button onClick={handleGenerateCommitMessage} disabled={staged.length === 0 || busy}
+                      className="text-[11px] px-2.5 py-1 rounded border border-vscode-border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40"
+                      style={{ background: 'transparent', outline: 'none' }}>
+                      Generate commit message
+                    </button>
+                  </div>
+                  <textarea value={commitMsg} onChange={(e) => setCommitMsg(e.target.value)} placeholder="Commit message…" rows={3}
+                    className="w-full rounded text-sm px-2 py-1.5 resize-none bg-vscode-bg border border-vscode-border text-vscode-text placeholder-vscode-text-muted focus:outline-none focus:border-vscode-accent" />
+                  <button onClick={() => { if (commitMsg.trim()) gitAction('/api/git/commit', { message: commitMsg }).then((ok) => { if (ok) setCommitMsg(''); }); }}
+                    disabled={!canCommit || busy}
+                    className={['mt-2 w-full py-2 rounded text-sm font-medium transition-colors', canCommit && !busy ? 'bg-vscode-accent text-white cursor-pointer' : 'bg-vscode-sidebar border border-vscode-border text-vscode-text-muted opacity-50 cursor-not-allowed'].join(' ')}
+                    style={{ border: 'none', outline: 'none' }}>
+                    {busy ? 'Working…' : 'Commit'}
+                  </button>
+                </div>
+              )}
+
+              <div className="flex gap-2 px-3 pt-2 pb-3">
+                <button onClick={() => gitAction('/api/git/pull')} disabled={busy}
+                  className="flex-1 py-2 rounded text-sm border border-vscode-border text-vscode-text hover:bg-vscode-sidebar-hover disabled:opacity-40"
+                  style={{ background: 'transparent', outline: 'none' }}>
+                  Pull
+                </button>
+                <button onClick={() => gitAction('/api/git/push')} disabled={busy}
+                  className="flex-1 py-2 rounded text-sm border border-vscode-border text-vscode-text hover:bg-vscode-sidebar-hover disabled:opacity-40"
+                  style={{ background: 'transparent', outline: 'none' }}>
+                  Push
+                </button>
+              </div>
+
+              {actionMsg && <p className="px-3 pb-3 text-[11px] text-vscode-text-muted whitespace-pre-wrap break-words">{actionMsg}</p>}
+            </div>
+          </div>
+        );
+      })()}
+      {isExpanded && !loading && !error && !gitStatus?.branch && (
+        <div className="px-3 py-3 text-sm text-vscode-text-muted">Not a git repository.</div>
+      )}
+    </div>
+  );
+}
+
+function GitView() {
+  const [repos, setRepos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedRepoIds, setExpandedRepoIds] = useState(() => new Set());
+
+  const fetchRepos = useCallback(() => {
+    setLoading(true);
+    fetch(apiUrl('/api/git/repos'))
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        const list = Array.isArray(data.repos) ? data.repos : [];
+        setRepos(list);
+        if (list.length === 1) {
+          setExpandedRepoIds(new Set([list[0].id]));
+        } else {
+          setExpandedRepoIds(new Set());
+        }
+      })
+      .catch(() => setRepos([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    fetchRepos();
+  }, [fetchRepos]);
+
+  function toggleRepo(repoId) {
+    setExpandedRepoIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(repoId)) next.delete(repoId);
+      else next.add(repoId);
+      return next;
+    });
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center gap-2 px-3 py-4 text-vscode-text-muted text-sm">
-        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M21 12a9 9 0 11-6.22-8.56" strokeLinecap="round" />
-        </svg>
-        Loading…
-      </div>
-    );
+    return <div className="px-3 py-4 text-sm text-vscode-text-muted">Loading repositories...</div>;
   }
 
-  if (error) {
-    return <p className="px-3 py-4 text-sm text-red-400">Error: {error}</p>;
+  if (!repos.length) {
+    return <div className="px-3 py-4 text-sm text-vscode-text-muted">No git repositories found in this workspace.</div>;
   }
-
-  if (!gitStatus?.branch) {
-    return (
-      <div className="px-3 py-4 text-sm text-vscode-text-muted">
-        Not a git repository.
-      </div>
-    );
-  }
-
-  const { repoName, branch, ahead, behind, staged, unstaged, untracked } = gitStatus;
-  const localBranches = branches.filter((b) => !b.remote);
-  const remoteBranches = branches.filter((b) => b.remote);
-  const hasChanges = staged.length + unstaged.length + untracked.length > 0;
-  const canCommit = staged.length > 0 && commitMsg.trim().length > 0;
-  const canGenerateCommitMsg = staged.length > 0 && !busy;
-  const hasMessage = commitMsg.trim().length > 0;
 
   return (
-    <div className="flex flex-col h-full">
-      {repos.length > 1 && (
-        <div className="px-3 py-2 border-b border-vscode-border bg-vscode-sidebar flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-vscode-text-muted shrink-0">Repository</span>
-          <select
-            value={selectedRepo}
-            onChange={(e) => {
-              setSelectedRepo(e.target.value);
-              setShowBranchPicker(false);
-              setPendingBranchSwitch(null);
-            }}
-            className="flex-1 bg-vscode-bg border border-vscode-border rounded px-2 py-1 text-xs text-vscode-text"
-            style={{ outline: 'none' }}
-          >
-            {repos.map((repo) => (
-              <option key={repo.id} value={repo.id}>
-                {repo.name} ({repo.id})
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Branch row */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-vscode-border shrink-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0 text-vscode-text-muted">
-            <line x1="6" y1="3" x2="6" y2="15" />
-            <circle cx="18" cy="6" r="3" />
-            <circle cx="6" cy="18" r="3" />
-            <path d="M18 9a9 9 0 01-9 9" />
-          </svg>
-          {repoName && (
-            <>
-              <span className="text-sm text-vscode-text-muted truncate shrink-0">{repoName}</span>
-              <span className="text-vscode-text-muted opacity-40 shrink-0">/</span>
-            </>
-          )}
-          <button
-            onClick={() => {
-              fetchBranches();
-              setShowBranchPicker((v) => !v);
-            }}
-            disabled={busy}
-            className="flex items-center gap-1 text-sm text-vscode-text truncate hover:text-white disabled:opacity-40"
-            style={{ background: 'none', border: 'none', outline: 'none' }}
-            title="Switch branch"
-          >
-            <span className="truncate">{branch}</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round"
-              className={`w-3 h-3 shrink-0 transition-transform ${showBranchPicker ? 'rotate-180' : ''}`}>
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          {ahead > 0 && <span className="text-[11px] text-green-400 shrink-0">↑{ahead}</span>}
-          {behind > 0 && <span className="text-[11px] text-yellow-400 shrink-0">↓{behind}</span>}
-        </div>
-        <button
-          onClick={fetchStatus}
-          disabled={busy}
-          title="Refresh"
-          style={{ background: 'none', border: 'none', outline: 'none' }}
-          className="text-vscode-text-muted hover:text-vscode-text cursor-pointer p-1 disabled:opacity-40 shrink-0"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-            <polyline points="23 4 23 10 17 10" />
-            <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
-          </svg>
-        </button>
-      </div>
-
-      {showBranchPicker && (
-        <div className="px-3 py-2 border-b border-vscode-border bg-vscode-sidebar">
-          {branches.length === 0 ? (
-            <p className="text-xs text-vscode-text-muted">No branches found.</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {localBranches.length > 0 && (
-                <p className="text-[10px] uppercase tracking-wider text-vscode-text-muted px-1 pt-1">Local branches</p>
-              )}
-              {localBranches.map((b) => (
-                <button
-                  key={`local:${b.fullName}`}
-                  onClick={() => handleSelectBranch(b)}
-                  disabled={busy || b.current}
-                  className={[
-                    'text-left px-2 py-1.5 rounded text-xs border border-vscode-border transition-colors',
-                    b.current
-                      ? 'text-vscode-text bg-vscode-bg opacity-70 cursor-default'
-                      : 'text-vscode-text-muted hover:text-vscode-text hover:bg-vscode-bg cursor-pointer',
-                  ].join(' ')}
-                  style={{ outline: 'none' }}
-                >
-                  <div className="flex items-center justify-between gap-2 w-full min-w-0">
-                    <span className="truncate">{b.name}</span>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {b.current && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded border border-green-500/40 text-green-400">
-                          Current
-                        </span>
-                      )}
-                      {b.upstream && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded border border-vscode-border text-vscode-text-muted">
-                          {b.upstream}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              ))}
-
-              {remoteBranches.length > 0 && (
-                <p className="text-[10px] uppercase tracking-wider text-vscode-text-muted px-1 pt-2">Remote branches</p>
-              )}
-              {remoteBranches.map((b) => (
-                <button
-                  key={`remote:${b.fullName}`}
-                  onClick={() => handleSelectBranch(b)}
-                  disabled={busy}
-                  className="text-left px-2 py-1.5 rounded text-xs border border-vscode-border transition-colors text-vscode-text-muted hover:text-vscode-text hover:bg-vscode-bg cursor-pointer"
-                  style={{ outline: 'none' }}
-                >
-                  <div className="flex items-center justify-between gap-2 w-full min-w-0">
-                    <span className="truncate">{b.fullName}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-vscode-border text-vscode-text-muted shrink-0">
-                      Remote
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {pendingBranchSwitch && (
-        <div className="px-3 py-2 border-b border-vscode-border bg-vscode-sidebar">
-          <p className="text-xs text-vscode-text-muted mb-2">
-            Uncommitted changes detected before switching to <span className="text-vscode-text">{pendingBranchSwitch.branch}</span>.
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => switchBranch(pendingBranchSwitch.branch, 'stash', pendingBranchSwitch.remote)}
-              disabled={busy}
-              className="flex-1 py-1.5 rounded text-xs border border-vscode-border text-vscode-text hover:bg-vscode-bg disabled:opacity-40"
-              style={{ background: 'transparent', outline: 'none' }}
-            >
-              Stash &amp; Switch
-            </button>
-            <button
-              onClick={() => switchBranch(pendingBranchSwitch.branch, 'force', pendingBranchSwitch.remote)}
-              disabled={busy}
-              className="flex-1 py-1.5 rounded text-xs border border-vscode-border text-red-300 hover:bg-vscode-bg disabled:opacity-40"
-              style={{ background: 'transparent', outline: 'none' }}
-            >
-              Discard &amp; Switch
-            </button>
-            <button
-              onClick={() => setPendingBranchSwitch(null)}
-              disabled={busy}
-              className="px-2 py-1.5 rounded text-xs border border-vscode-border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40"
-              style={{ background: 'transparent', outline: 'none' }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Scrollable changes + actions */}
-      <div className="flex-1 overflow-y-auto">
-        {!hasChanges && (
-          <p className="px-3 py-4 text-sm text-vscode-text-muted">No changes.</p>
-        )}
-
-        <GitSection
-          title="Staged"
-          files={staged}
-          action={staged.length ? handleUnstageAll : null}
-          actionLabel="Unstage all"
-          busy={busy}
+    <div className="flex flex-col h-full overflow-y-auto">
+      {repos.map((repo) => (
+        <RepoGitPanel
+          key={repo.id}
+          repo={repo}
+          isExpanded={expandedRepoIds.has(repo.id)}
+          onToggle={() => toggleRepo(repo.id)}
         />
-        <GitSection
-          title="Changes"
-          files={unstaged}
-          action={unstaged.length ? handleStageAll : null}
-          actionLabel="Stage all"
-          busy={busy}
-        />
-        <GitSection
-          title="Untracked"
-          files={untracked}
-          action={untracked.length ? handleStageAll : null}
-          actionLabel="Stage all"
-          busy={busy}
-        />
-
-        {/* Commit area */}
-        {staged.length > 0 && (
-          <div className="px-3 pt-3 pb-2 border-t border-vscode-border mt-1">
-            <div className="mb-2.5 p-2 rounded border border-vscode-border bg-vscode-sidebar">
-              <div className="text-[11px] uppercase tracking-wider text-vscode-text-muted mb-1.5">Commit flow</div>
-              <div className="grid grid-cols-3 gap-2 text-[11px]">
-                <div className="rounded border px-2 py-1 border-vscode-border text-vscode-text">
-                  <div className="font-medium">1. Stage</div>
-                  <div className="text-vscode-text-muted">{staged.length} staged</div>
-                </div>
-                <div className={[
-                  'rounded border px-2 py-1',
-                  hasMessage ? 'border-green-500/40 text-vscode-text' : 'border-vscode-border text-vscode-text-muted',
-                ].join(' ')}>
-                  <div className="font-medium">2. Message</div>
-                  <div>{hasMessage ? 'ready' : 'required'}</div>
-                </div>
-                <div className={[
-                  'rounded border px-2 py-1',
-                  canCommit ? 'border-green-500/40 text-vscode-text' : 'border-vscode-border text-vscode-text-muted',
-                ].join(' ')}>
-                  <div className="font-medium">3. Commit</div>
-                  <div>{canCommit ? 'ready' : 'blocked'}</div>
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end mb-1">
-              <button
-                onClick={handleGenerateCommitMessage}
-                disabled={!canGenerateCommitMsg}
-                className="text-[11px] px-2.5 py-1 rounded border border-vscode-border
-                           text-vscode-text-muted hover:text-vscode-text hover:bg-vscode-sidebar-hover
-                           cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ background: 'transparent', outline: 'none' }}
-              >
-                Generate commit message
-              </button>
-            </div>
-            <textarea
-              value={commitMsg}
-              onChange={(e) => setCommitMsg(e.target.value)}
-              placeholder="Commit message…"
-              rows={3}
-              className="w-full rounded text-sm px-2 py-1.5 resize-none
-                         bg-vscode-bg border border-vscode-border
-                         text-vscode-text placeholder-vscode-text-muted
-                         focus:outline-none focus:border-vscode-accent"
-            />
-            <button
-              onClick={handleCommit}
-              disabled={!canCommit || busy}
-              className={[
-                'mt-2 w-full py-2 rounded text-sm font-medium transition-colors',
-                canCommit && !busy
-                  ? 'bg-vscode-accent text-white cursor-pointer'
-                  : 'bg-vscode-sidebar border border-vscode-border text-vscode-text-muted opacity-50 cursor-not-allowed',
-              ].join(' ')}
-              style={{ border: 'none', outline: 'none' }}
-            >
-              {busy ? 'Working…' : 'Commit'}
-            </button>
-            <p className="mt-1.5 text-[11px] text-vscode-text-muted">
-              Commit saves locally. Push uploads your commits to remote.
-            </p>
-          </div>
-        )}
-
-        {/* Push / Pull */}
-        <div className="flex gap-2 px-3 pt-2 pb-3">
-          <button
-            onClick={handlePull}
-            disabled={busy}
-            className="flex-1 py-2 rounded text-sm border border-vscode-border
-                       text-vscode-text hover:bg-vscode-sidebar-hover
-                       cursor-pointer transition-colors disabled:opacity-40"
-            style={{ background: 'transparent', outline: 'none' }}
-          >
-            Pull
-          </button>
-          <button
-            onClick={handlePush}
-            disabled={busy}
-            className="flex-1 py-2 rounded text-sm border border-vscode-border
-                       text-vscode-text hover:bg-vscode-sidebar-hover
-                       cursor-pointer transition-colors disabled:opacity-40"
-            style={{ background: 'transparent', outline: 'none' }}
-          >
-            Push
-          </button>
-        </div>
-
-        {actionMsg && (
-          <p className="px-3 pb-3 text-[11px] text-vscode-text-muted whitespace-pre-wrap break-words">
-            {actionMsg}
-          </p>
-        )}
-      </div>
+      ))}
     </div>
   );
 }
