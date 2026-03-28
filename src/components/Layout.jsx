@@ -117,11 +117,11 @@ export default function Layout({ activeTab, onTabChange, children }) {
       <nav
         aria-label="Main navigation"
         style={{
-          // Glassmorphism: semi-transparent dark surface + blur
           backgroundColor: 'rgba(13, 13, 15, 0.75)',
           backdropFilter: 'blur(20px) saturate(180%)',
           WebkitBackdropFilter: 'blur(20px) saturate(180%)',
           borderTop: '1px solid rgba(255,255,255,0.06)',
+          paddingBottom: 'env(safe-area-inset-bottom)',
         }}
         className="flex shrink-0"
       >
@@ -135,8 +135,8 @@ export default function Layout({ activeTab, onTabChange, children }) {
               aria-current={isActive ? 'page' : undefined}
               style={{ background: 'transparent', border: 'none', outline: 'none' }}
               className={[
-                'flex-1 flex flex-col items-center justify-center gap-1 py-2',
-                'min-h-[56px] transition-colors cursor-pointer',
+                'flex-1 flex flex-col items-center justify-center gap-1 pt-2 pb-3',
+                'min-h-[56px] transition-colors cursor-pointer overflow-visible',
                 'relative',
                 isActive ? 'text-vscode-accent' : 'text-vscode-text-muted',
               ].join(' ')}
