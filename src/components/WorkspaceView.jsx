@@ -157,12 +157,15 @@ function GitView() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         setActionMsg(data.error || `Failed (${r.status})`);
+        return false;
       } else {
         if (data.output) setActionMsg(data.output);
         fetchStatus();
+        return true;
       }
     } catch (e) {
       setActionMsg(e.message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -204,6 +207,7 @@ function GitView() {
   const { repoName, branch, ahead, behind, staged, unstaged, untracked } = gitStatus;
   const hasChanges = staged.length + unstaged.length + untracked.length > 0;
   const canCommit = staged.length > 0 && commitMsg.trim().length > 0;
+  const hasMessage = commitMsg.trim().length > 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -273,6 +277,29 @@ function GitView() {
         {/* Commit area */}
         {staged.length > 0 && (
           <div className="px-3 pt-3 pb-2 border-t border-vscode-border mt-1">
+            <div className="mb-2.5 p-2 rounded border border-vscode-border bg-vscode-sidebar">
+              <div className="text-[11px] uppercase tracking-wider text-vscode-text-muted mb-1.5">Commit flow</div>
+              <div className="grid grid-cols-3 gap-2 text-[11px]">
+                <div className="rounded border px-2 py-1 border-vscode-border text-vscode-text">
+                  <div className="font-medium">1. Stage</div>
+                  <div className="text-vscode-text-muted">{staged.length} staged</div>
+                </div>
+                <div className={[
+                  'rounded border px-2 py-1',
+                  hasMessage ? 'border-green-500/40 text-vscode-text' : 'border-vscode-border text-vscode-text-muted',
+                ].join(' ')}>
+                  <div className="font-medium">2. Message</div>
+                  <div>{hasMessage ? 'ready' : 'required'}</div>
+                </div>
+                <div className={[
+                  'rounded border px-2 py-1',
+                  canCommit ? 'border-green-500/40 text-vscode-text' : 'border-vscode-border text-vscode-text-muted',
+                ].join(' ')}>
+                  <div className="font-medium">3. Commit</div>
+                  <div>{canCommit ? 'ready' : 'blocked'}</div>
+                </div>
+              </div>
+            </div>
             <textarea
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
@@ -296,6 +323,9 @@ function GitView() {
             >
               {busy ? 'Working…' : 'Commit'}
             </button>
+            <p className="mt-1.5 text-[11px] text-vscode-text-muted">
+              Commit saves locally. Push uploads your commits to remote.
+            </p>
           </div>
         )}
 
