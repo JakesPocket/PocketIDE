@@ -471,9 +471,11 @@ export default function Chat() {
     // Append user message
     setMessages((prev) => [...prev, { role: 'user', text: prompt }]);
 
-    // Reserve a slot for the streaming agent reply, identified by a stable id
-    const agentId = createMessageId();
-    setMessages((prev) => [...prev, { id: agentId, role: 'agent', text: '', streaming: true }]);
+    // Text bubbles are created on demand as delta events arrive.
+    // activeTextBubbleId  — the id of the currently-streaming text bubble (null between segments).
+    // firstAgentId        — used to inject reasoning before the first agent bubble.
+    let activeTextBubbleId = null;
+    let firstAgentId = null;
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -517,22 +519,49 @@ export default function Chat() {
               break;
 
             case 'delta':
-              setMessages((prev) => {
-                const next = [...prev];
-                const i = next.findIndex((m) => m.id === agentId);
-                if (i !== -1 && next[i].role === 'agent') {
-                  next[i] = { ...next[i], text: next[i].text + event.content, streaming: true };
-                }
-                return next;
-              });
+              if (!activeTextBubbleId) {
+                const newId = createMessageId();
+                if (!firstAgentId) firstAgentId = newId;
+                activeTextBubbleId = newId;
+                setMessages((prev) => [...prev, { id: newId, role: 'agent', text: event.content, streaming: true }]);
+              } else {
+                const curId = activeTextBubbleId;
+                setMessages((prev) => {
+                  const next = [...prev];
+                  const i = next.findIndex((m) => m.id === curId);
+                  if (i !== -1 && next[i].role === 'agent') {
+                    next[i] = { ...next[i], text: next[i].text + event.content };
+                  }
+                  return next;
+                });
+              }
               break;
 
-            case 'tool_call':
+            case 'tool_call': {
+              // Finalize the current text bubble before showing the tool action
+              const curId = activeTextBubbleId;
+              if (curId) {
+                setMessages((prev) => {
+                  const next = [...prev];
+                  const i = next.findIndex((m) => m.id === curId);
+                  if (i !== -1 && next[i].role === 'agent') {
+                    if (!next[i].text.trim()) {
+                      next.splice(i, 1);
+                      if (firstAgentId === curId) firstAgentId = null;
+                    } else {
+                      next[i] = { ...next[i], streaming: false };
+                    }
+                  }
+                  return next;
+                });
+                activeTextBubbleId = null;
+              }
               setMessages((prev) => [
                 ...prev,
                 { role: 'tool', tool: event.tool, input: event.input ?? null, output: null, done: false },
               ]);
               break;
+            }
 
             case 'tool_result':
               setMessages((prev) => {
@@ -549,15 +578,24 @@ export default function Chat() {
               break;
 
             case 'message':
-              // Replace streaming placeholder with final complete text
-              setMessages((prev) => {
-                const next = [...prev];
-                const i = next.findIndex((m) => m.id === agentId);
-                if (i !== -1 && next[i].role === 'agent') {
-                  next[i] = { id: agentId, role: 'agent', text: event.content, streaming: false };
-                }
-                return next;
-              });
+              // Finalize the active streaming text bubble with authoritative final content
+              if (activeTextBubbleId) {
+                const curId = activeTextBubbleId;
+                setMessages((prev) => {
+                  const next = [...prev];
+                  const i = next.findIndex((m) => m.id === curId);
+                  if (i !== -1 && next[i].role === 'agent') {
+                    next[i] = { ...next[i], text: event.content, streaming: false };
+                  }
+                  return next;
+                });
+                activeTextBubbleId = null;
+              } else if (event.content?.trim()) {
+                // No active bubble — message arrived without prior deltas
+                const newId = createMessageId();
+                if (!firstAgentId) firstAgentId = newId;
+                setMessages((prev) => [...prev, { id: newId, role: 'agent', text: event.content, streaming: false }]);
+              }
               break;
 
             case 'error':
@@ -574,33 +612,36 @@ export default function Chat() {
         }
       }
 
-      // If reasoning was accumulated, inject it just before the agent bubble
-      if (reasoningAcc) {
+      // If reasoning was accumulated, inject it just before the first agent bubble
+      if (reasoningAcc && firstAgentId) {
+        const fId = firstAgentId;
         setMessages((prev) => {
           const next = [...prev];
-          const i = next.findIndex((m) => m.id === agentId);
+          const i = next.findIndex((m) => m.id === fId);
           if (i !== -1) next.splice(i, 0, { role: 'reasoning', text: reasoningAcc });
           return next;
         });
       }
 
-      // Finalise: strip streaming flag
+      // Finalise: clean up any remaining streaming agent bubble (safety net)
       setMessages((prev) => {
         const next = [...prev];
-        const i = next.findIndex((m) => m.id === agentId);
-        if (i !== -1 && next[i].role === 'agent') {
-          const text = typeof next[i].text === 'string' ? next[i].text.trim() : '';
-          if (!text) {
-            if (sawServerError) {
-              next.splice(i, 1);
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === 'agent' && next[i].streaming) {
+            const text = typeof next[i].text === 'string' ? next[i].text.trim() : '';
+            if (!text) {
+              if (sawServerError) {
+                next.splice(i, 1);
+              } else {
+                next[i] = {
+                  role: 'error',
+                  text: 'No response content was returned by the agent. Check backend auth/token setup.',
+                };
+              }
             } else {
-              next[i] = {
-                role: 'error',
-                text: 'No response content was returned by the agent. Check backend auth/token setup.',
-              };
+              next[i] = { ...next[i], streaming: false };
             }
-          } else {
-            next[i] = { ...next[i], streaming: false };
+            break;
           }
         }
         return next;
