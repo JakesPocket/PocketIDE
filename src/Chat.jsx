@@ -355,6 +355,7 @@ export default function Chat() {
   const [reviewActionMsg, setReviewActionMsg] = useState('');
   const [undoBusy, setUndoBusy] = useState(false);
   const bottomRef = useRef(null);
+  const scrollRef = useRef(null);
   const abortRef = useRef(null);
   const preRequestSnapshotRef = useRef(new Map());
 
@@ -421,9 +422,14 @@ export default function Chat() {
     return () => clearInterval(timer);
   }, [fetchChangesSummary]);
 
-  // Auto-scroll on new messages
+  // Auto-scroll only when already at (or near) the bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 80) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -700,7 +706,7 @@ export default function Chat() {
   return (
     <div className="flex flex-col h-full">
       {/* Message list */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
         {messages.map((msg, idx) => {
           if (msg.role === 'user')      return <UserBubble    key={idx} text={msg.text} />;
           if (msg.role === 'agent')     return <AgentBubble   key={idx} text={msg.text} streaming={msg.streaming} />;
