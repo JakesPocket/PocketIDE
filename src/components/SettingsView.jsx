@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { apiUrl } from '../config/server';
 import { readText, writeText } from '../utils/persist';
 
@@ -11,10 +11,11 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
   const [workspacePath, setWorkspacePath] = useState(null);
   const [changing, setChanging] = useState(false);
   const [inputPath, setInputPath] = useState('');
+  const workspaceRowRef = useRef(null);
   const [error, setError] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-  const [chatAgentLabel, setChatAgentLabel] = useState(() => readText(CHAT_UI_AGENT_KEY, 'Agent'));
+  const [chatAgentLabel, setChatAgentLabel] = useState(() => readText(CHAT_UI_AGENT_KEY, 'agent'));
   const [chatModelLabel, setChatModelLabel] = useState(() => readText(CHAT_UI_MODEL_KEY, 'Auto'));
   const [chatExecModeLabel, setChatExecModeLabel] = useState(() => readText(CHAT_UI_EXEC_MODE_KEY, 'Local'));
   const [chatApprovalLabel, setChatApprovalLabel] = useState(() => readText(CHAT_UI_APPROVAL_KEY, 'Default Approvals'));
@@ -28,6 +29,24 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
       .then((d) => setWorkspacePath(d.path))
       .catch(() => setWorkspacePath('(unavailable)'));
   }, []);
+
+  function handleCancelChange() {
+    setInputPath(workspacePath ?? '');
+    setSuggestions([]);
+    setError('');
+    setChanging(false);
+  }
+
+  useEffect(() => {
+    if (!changing) return;
+    function handleClickOutside(e) {
+      if (workspaceRowRef.current && !workspaceRowRef.current.contains(e.target)) {
+        handleCancelChange();
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [changing, workspacePath]);
 
   function handleChangeClick() {
     setInputPath(workspacePath ?? '');
@@ -116,7 +135,7 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
           style={{ backgroundColor: 'rgba(255,255,255,0.04)' }}
         >
           {/* Current Workspace row */}
-          <div className="px-4 py-3 border-b border-vscode-border">
+          <div className="px-4 py-3 border-b border-vscode-border" ref={workspaceRowRef}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm text-vscode-text font-medium">Current Workspace</p>
@@ -127,14 +146,24 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
                   {workspacePath ?? 'Loading…'}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleChangeClick}
-                className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium border border-vscode-border text-vscode-text cursor-pointer"
-                style={{ background: 'transparent' }}
-              >
-                Change
-              </button>
+              {changing ? (
+                <button
+                  type="button"
+                  onClick={handleConfirmChange}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-vscode-accent text-white border-none cursor-pointer"
+                >
+                  Apply
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleChangeClick}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium border border-vscode-border text-vscode-text cursor-pointer"
+                  style={{ background: 'transparent' }}
+                >
+                  Change
+                </button>
+              )}
             </div>
 
             {changing && (
@@ -145,7 +174,7 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
                   onChange={(e) => setInputPath(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleConfirmChange();
-                    if (e.key === 'Escape') setChanging(false);
+                    if (e.key === 'Escape') handleCancelChange();
                   }}
                   placeholder="/absolute/path/to/folder"
                   className="w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent focus:outline-none focus:border-vscode-accent"
@@ -176,23 +205,6 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
                 {error && (
                   <p className="text-xs text-red-400 mt-1">{error}</p>
                 )}
-                <div className="flex gap-2 mt-2">
-                  <button
-                    type="button"
-                    onClick={handleConfirmChange}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-vscode-accent text-white border-none cursor-pointer"
-                  >
-                    Apply
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setChanging(false)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium border border-vscode-border text-vscode-text cursor-pointer"
-                    style={{ background: 'transparent' }}
-                  >
-                    Cancel
-                  </button>
-                </div>
               </div>
             )}
           </div>
@@ -222,17 +234,17 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
         </p>
         <div className="rounded-xl border border-vscode-border overflow-hidden" style={{ backgroundColor: 'rgba(255,255,255,0.04)' }}>
           <div className="px-4 py-3 border-b border-vscode-border">
-            <p className="text-sm text-vscode-text font-medium">Top Bar Mode</p>
-            <p className="text-xs text-vscode-text-muted mt-0.5">Controls what label appears in the first control row.</p>
+            <p className="text-sm text-vscode-text font-medium">AI Mode</p>
+            <p className="text-xs text-vscode-text-muted mt-0.5">Autonomous agent, ask for approval, or show plan first.</p>
             <select
               value={chatAgentLabel}
               onChange={(e) => setChatAgentLabel(e.target.value)}
               className="mt-2 w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
               style={{ outline: 'none' }}
             >
-              <option value="Agent">Agent</option>
-              <option value="Chat">Chat</option>
-              <option value="Assist">Assist</option>
+              <option value="agent">Agent</option>
+              <option value="ask">Ask</option>
+              <option value="plan">Plan</option>
             </select>
           </div>
 
