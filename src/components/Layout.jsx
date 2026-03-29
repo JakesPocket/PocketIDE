@@ -20,6 +20,10 @@ function useAppViewportHeight() {
     }
 
     const visible = Math.max(0, Math.round(vv.height));
+    // offsetTop is how far the visual viewport has scrolled from the layout viewport top.
+    // On iOS, opening the keyboard can produce a non-zero offsetTop, so we must add it
+    // to the height so the layout fills from y=0 all the way to the keyboard top.
+    const offsetTop = Math.max(0, Math.round(vv.offsetTop ?? 0));
 
     // Always ratchet up so the reference never shrinks due to keyboard.
     if (visible > maxVvHeightRef.current) {
@@ -31,9 +35,10 @@ function useAppViewportHeight() {
     const fullHeight = maxVvHeightRef.current || Math.round(vv.height);
     const keyboardOpen = visible < fullHeight - 120;
 
-    // Keep the parent shell pinned and only shrink by visible height when keyboard is open.
+    // When the keyboard is open, include offsetTop so the shell extends from the very
+    // top of the page down to exactly where the keyboard begins — no gap.
     return {
-      height: keyboardOpen ? visible : fullHeight,
+      height: keyboardOpen ? visible + offsetTop : fullHeight,
       keyboardOpen,
     };
   }
@@ -65,12 +70,15 @@ function useAppViewportHeight() {
 
     if (vv) {
       vv.addEventListener('resize', update);
+      // 'scroll' fires when visualViewport.offsetTop changes (e.g. keyboard push on iOS).
+      vv.addEventListener('scroll', update);
     }
 
     return () => {
       window.removeEventListener('resize', update);
       if (vv) {
         vv.removeEventListener('resize', update);
+        vv.removeEventListener('scroll', update);
       }
     };
   }, []);
@@ -208,7 +216,7 @@ export default function Layout({ activeTab, onTabChange, children }) {
   const { keyboardOpen } = useAppViewportHeight();
   const layoutRef = useRef(null);
   const touchStartYRef = useRef(null);
-  const navBottomOffsetPx = keyboardOpen ? 10 : 20;
+  const navBottomOffsetPx = keyboardOpen ? 0 : 20;
   const topSafeExtraPx = 0
   const navTopGapPx = 8;
   const activeTabIndex = Math.max(0, TAB_ITEMS.findIndex((tab) => tab.id === activeTab));
