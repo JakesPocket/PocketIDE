@@ -3,6 +3,78 @@ const http = require('http');
 const { Server } = require('socket.io');
 const pty = require('node-pty');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+const util = require('util');
+
+function setupFileLogging(serviceName) {
+    const logsDir = process.env.LOG_DIR
+        ? path.resolve(process.env.LOG_DIR)
+        : path.resolve(__dirname, 'logs');
+
+    try {
+        fs.mkdirSync(logsDir, { recursive: true });
+    } catch (err) {
+        process.stderr.write(`[logging] failed to create log directory ${logsDir}: ${err.message}\n`);
+        return null;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const fileName = process.env.LOG_FILE || `${serviceName}-${today}.log`;
+    const filePath = path.resolve(logsDir, fileName);
+
+    let stream;
+    try {
+        stream = fs.createWriteStream(filePath, { flags: 'a' });
+    } catch (err) {
+        process.stderr.write(`[logging] failed to open log file ${filePath}: ${err.message}\n`);
+        return null;
+    }
+
+    const original = {
+        log: console.log.bind(console),
+        info: console.info.bind(console),
+        warn: console.warn.bind(console),
+        error: console.error.bind(console)
+    };
+
+    const writeLine = (level, args) => {
+        try {
+            const timestamp = new Date().toISOString();
+            const message = util.format(...args);
+            stream.write(`[${timestamp}] [${level}] ${message}\n`);
+        } catch (_) {
+            // Do not break runtime logging if file writes fail.
+        }
+    };
+
+    console.log = (...args) => {
+        original.log(...args);
+        writeLine('LOG', args);
+    };
+    console.info = (...args) => {
+        original.info(...args);
+        writeLine('INFO', args);
+    };
+    console.warn = (...args) => {
+        original.warn(...args);
+        writeLine('WARN', args);
+    };
+    console.error = (...args) => {
+        original.error(...args);
+        writeLine('ERROR', args);
+    };
+
+    process.on('exit', (code) => {
+        writeLine('EXIT', [`process exiting with code ${code}`]);
+        stream.end();
+    });
+
+    original.log(`[logging] writing bridge logs to ${filePath}`);
+    return filePath;
+}
+
+setupFileLogging('bridge');
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 

@@ -39,14 +39,14 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
   const [providerMsg, setProviderMsg] = useState('');
   const [copilotAuthType, setCopilotAuthType] = useState('logged-in-user');
   const [copilotToken, setCopilotToken] = useState('');
-  const [codexApiKey, setCodexApiKey] = useState('');
-  const [codexBaseUrl, setCodexBaseUrl] = useState('https://api.openai.com/v1');
-  const [codexModel, setCodexModel] = useState('gpt-5-codex');
+  const [codexModel, setCodexModel] = useState('codex-mini-latest');
   const [localApiKey, setLocalApiKey] = useState('');
   const [localBaseUrl, setLocalBaseUrl] = useState('http://127.0.0.1:11434/v1');
   const [localModel, setLocalModel] = useState('qwen2.5-coder:latest');
   const [localHealthBusy, setLocalHealthBusy] = useState(false);
   const [localHealthMsg, setLocalHealthMsg] = useState('');
+  const [codexLoginBusy, setCodexLoginBusy] = useState(false);
+  const [codexLoginOutput, setCodexLoginOutput] = useState('');
 
   const fetchProviderStatus = useCallback(async () => {
     try {
@@ -56,7 +56,6 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
       const providers = data?.providers || {};
       setProviderStatus(providers);
       if (providers.copilot?.authType) setCopilotAuthType(providers.copilot.authType);
-      if (providers.codex?.baseUrl) setCodexBaseUrl(providers.codex.baseUrl);
       if (providers.codex?.model) setCodexModel(providers.codex.model);
       if (providers.local?.baseUrl) setLocalBaseUrl(providers.local.baseUrl);
       if (providers.local?.model) setLocalModel(providers.local.model);
@@ -198,22 +197,49 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          codex: {
-            baseUrl: codexBaseUrl,
-            model: codexModel,
-            ...(codexApiKey.trim() ? { apiKey: codexApiKey } : {}),
-          },
+          codex: { model: codexModel },
         }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || `Failed (${r.status})`);
       setProviderStatus(data.providers || null);
-      setCodexApiKey('');
-      setProviderMsg('Codex provider settings saved.');
+      setProviderMsg('Codex model saved.');
     } catch (e) {
       setProviderMsg(e.message || 'Failed to save Codex settings.');
     } finally {
       setProviderBusy(false);
+    }
+  }
+
+  async function handleCodexLogin() {
+    setCodexLoginBusy(true);
+    setCodexLoginOutput('');
+    try {
+      const response = await fetch(apiUrl('/api/providers/codex/login'), { method: 'POST' });
+      if (!response.body) throw new Error('No response stream.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'output') setCodexLoginOutput((prev) => prev + data.content);
+            if (data.type === 'error') setCodexLoginOutput((prev) => prev + `\nError: ${data.message}`);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      setCodexLoginOutput((prev) => prev + `\nError: ${e.message}`);
+    } finally {
+      setCodexLoginBusy(false);
+      fetchProviderStatus();
     }
   }
 
@@ -494,30 +520,16 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
           </div>
 
           <div className="px-4 py-3">
-            <p className="text-sm text-vscode-text font-medium">Codex</p>
-            <p className="text-xs text-vscode-text-muted mt-0.5">Configure API key, base URL, and model for Codex/OpenAI-compatible endpoints.</p>
+            <p className="text-sm text-vscode-text font-medium">Codex (OpenAI Codex CLI)</p>
+            <p className="text-xs text-vscode-text-muted mt-0.5">
+              Uses the OpenAI Codex CLI — authenticate with your ChatGPT account instead of an API key.
+            </p>
             <div className="mt-2 grid grid-cols-1 gap-2">
-              <input
-                type="password"
-                value={codexApiKey}
-                onChange={(e) => setCodexApiKey(e.target.value)}
-                placeholder="Codex API key"
-                className="w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
-                style={{ outline: 'none' }}
-              />
-              <input
-                type="text"
-                value={codexBaseUrl}
-                onChange={(e) => setCodexBaseUrl(e.target.value)}
-                placeholder="https://api.openai.com/v1"
-                className="w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
-                style={{ outline: 'none' }}
-              />
               <input
                 type="text"
                 value={codexModel}
                 onChange={(e) => setCodexModel(e.target.value)}
-                placeholder="gpt-5-codex"
+                placeholder="codex-mini-latest"
                 className="w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent"
                 style={{ outline: 'none' }}
               />
@@ -528,12 +540,35 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
                 className="px-3 py-1.5 rounded-lg text-xs font-medium border border-vscode-border text-vscode-text cursor-pointer disabled:opacity-40"
                 style={{ background: 'transparent' }}
               >
-                Save Codex Sign-in
+                Save Model
+              </button>
+              <button
+                type="button"
+                onClick={handleCodexLogin}
+                disabled={codexLoginBusy}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium border border-vscode-border text-vscode-text cursor-pointer disabled:opacity-40"
+                style={{ background: 'transparent' }}
+              >
+                {codexLoginBusy ? 'Authenticating…' : 'Login with ChatGPT'}
               </button>
             </div>
+            {codexLoginOutput && (
+              <pre className="mt-2 p-2 rounded text-[10px] text-vscode-text-muted bg-vscode-bg overflow-auto max-h-40 whitespace-pre-wrap break-all">
+                {codexLoginOutput}
+              </pre>
+            )}
             <p className="text-[11px] text-vscode-text-muted mt-2">
+              CLI: {providerStatus?.codex?.cliInstalled ? 'Installed' : 'Not installed'}
+              {' · '}
+              Auth: {providerStatus?.codex?.authenticated ? 'Authenticated' : 'Not authenticated'}
+              {' · '}
               Status: {providerStatus?.codex?.ready ? 'Ready' : 'Not ready'}
             </p>
+            {!providerStatus?.codex?.cliInstalled && (
+              <p className="text-[11px] text-vscode-text-muted mt-1">
+                Install the Codex CLI: <code className="font-mono">npm install -g @openai/codex</code>
+              </p>
+            )}
           </div>
 
           <div className="px-4 py-3 border-t border-vscode-border">

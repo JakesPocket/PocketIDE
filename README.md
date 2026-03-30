@@ -14,3 +14,9 @@ What it does:
 - Starts `PocketIDE-Server` and `PocketIDE` together.
 - Prints local and LAN URLs for desktop/iPhone testing.
 - Stops both processes cleanly on `Ctrl+C`.
+
+## Logs
+
+- The bridge service writes logs to `bridge/logs/bridge-YYYY-MM-DD.log`.
+- The main backend writes logs to `../PocketIDE-Server/logs/server-YYYY-MM-DD.log`.
+- Override with `LOG_DIR` and `LOG_FILE` environment variables when needed.
