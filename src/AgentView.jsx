@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { apiUrl } from './config/server';
 import { readJson, writeJson, readText, writeText } from './utils/persist';
+import { preventScrollOnFocus } from './utils/preventScrollOnFocus';
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -2452,6 +2453,7 @@ export default function AgentView({ onOpenDiffFiles }) {
               ref={composerTextareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onFocus={preventScrollOnFocus}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();

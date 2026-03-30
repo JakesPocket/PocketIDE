@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiUrl } from '../config/server';
 import { readText, writeText } from '../utils/persist';
+import { preventScrollOnFocus } from '../utils/preventScrollOnFocus';
 
 const EXTENSIONS_TAB_KEY = 'pocketide.extensions.activeSubTab.v1';
 
@@ -478,6 +479,7 @@ function RepoGitPanel({ repo, isExpanded, onToggle }) {
                     <input
                       value={newBranchName}
                       onChange={(e) => setNewBranchName(e.target.value)}
+                      onFocus={preventScrollOnFocus}
                       placeholder="new-branch-name"
                       className="w-full px-2 py-1.5 rounded border border-vscode-border bg-vscode-sidebar text-xs text-vscode-text"
                       style={{ outline: 'none' }}

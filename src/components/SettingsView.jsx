@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiUrl } from '../config/server';
 import { readText, writeText } from '../utils/persist';
+import { preventScrollOnFocus } from '../utils/preventScrollOnFocus';
 
 const CHAT_UI_AGENT_KEY = 'pocketide.chat.ui.agent.v1';
 const CHAT_UI_MODEL_KEY = 'pocketide.chat.ui.model.v1';
@@ -27,6 +28,7 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
   const [changing, setChanging] = useState(false);
   const [inputPath, setInputPath] = useState('');
   const workspaceRowRef = useRef(null);
+  const pathInputRef = useRef(null);
   const [error, setError] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -95,6 +97,14 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [changing, workspacePath]);
+
+  // Focus the path input without triggering browser auto-scroll.
+  useEffect(() => {
+    if (!changing) return;
+    requestAnimationFrame(() => {
+      pathInputRef.current?.focus({ preventScroll: true });
+    });
+  }, [changing]);
 
   function handleChangeClick() {
     setInputPath(workspacePath ?? '');
@@ -353,15 +363,16 @@ export default function SettingsView({ onClearCache, onWorkspaceChanged }) {
               <div className="mt-3">
                 <input
                   type="text"
+                  ref={pathInputRef}
                   value={inputPath}
                   onChange={(e) => setInputPath(e.target.value)}
+                  onFocus={preventScrollOnFocus}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleConfirmChange();
                     if (e.key === 'Escape') handleCancelChange();
                   }}
                   placeholder="/absolute/path/to/folder"
                   className="w-full px-3 py-2 rounded-lg text-sm text-vscode-text border border-vscode-border bg-transparent focus:outline-none focus:border-vscode-accent"
-                  autoFocus
                 />
                 {(loadingSuggestions || suggestions.length > 0) && (
                   <div
