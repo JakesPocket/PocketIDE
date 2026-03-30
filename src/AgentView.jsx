@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { apiUrl } from './config/server';
 import { readJson, writeJson, readText, writeText } from './utils/persist';
 
+const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 const CHAT_MESSAGES_KEY = 'pocketide.chat.messages.v1';
 const CHAT_INPUT_KEY = 'pocketide.chat.input.v1';
 const CHAT_PENDING_REVIEW_KEY = 'pocketide.chat.pendingReviewPaths.v1';
@@ -48,6 +50,63 @@ function createMessageId() {
   return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+const TEXT_EXTENSIONS = new Set([
+  '.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.c', '.cpp', '.h', '.cs',
+  '.go', '.rb', '.php', '.swift', '.kt', '.rs', '.json', '.yaml', '.yml',
+  '.toml', '.xml', '.md', '.txt', '.sh', '.env', '.css', '.html', '.vue',
+  '.svelte', '.graphql', '.gql', '.sql', '.ini', '.cfg', '.conf',
+]);
+
+function isTextFile(file) {
+  if (file.type.startsWith('text/')) return true;
+  const lower = file.name.toLowerCase();
+  return Array.from(TEXT_EXTENSIONS).some((ext) => lower.endsWith(ext));
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function readFileAs(file, method) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    if (method === 'text') reader.readAsText(file);
+    else reader.readAsDataURL(file);
+  });
+}
+
+async function readAttachmentFile(file) {
+  const MAX_SIZE = 10 * 1024 * 1024;
+  const isImage = file.type.startsWith('image/');
+  const isText = isTextFile(file);
+  let data = '';
+  let preview = null;
+  if (file.size > MAX_SIZE) {
+    data = `[File too large to attach: ${formatFileSize(file.size)}]`;
+  } else if (isImage) {
+    data = await readFileAs(file, 'dataurl');
+    preview = data;
+  } else if (isText) {
+    data = await readFileAs(file, 'text');
+  } else {
+    data = await readFileAs(file, 'dataurl');
+  }
+  return {
+    id: createMessageId(),
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    data,
+    preview,
+    isImage,
+    isText,
+  };
+}
+
 function normalizeStoredMessage(msg) {
   if (!msg || typeof msg !== 'object') return null;
 
@@ -64,7 +123,7 @@ function normalizeStoredMessage(msg) {
   }
 
   if (['user', 'agent', 'reasoning', 'error', 'handoff'].includes(msg.role)) {
-    return {
+    const base = {
       id: typeof msg.id === 'string' && msg.id ? msg.id : createMessageId(),
       turnId: typeof msg.turnId === 'string' ? msg.turnId : null,
       role: msg.role,
@@ -77,6 +136,21 @@ function normalizeStoredMessage(msg) {
       isTimeout: Boolean(msg.isTimeout),
       isLoop: Boolean(msg.isLoop),
     };
+    if (msg.role === 'user' && Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      base.attachments = msg.attachments
+        .filter((a) => a && typeof a === 'object' && typeof a.name === 'string')
+        .map(({ id, name, type, size, isImage, isText }) => ({
+          id: typeof id === 'string' ? id : createMessageId(),
+          name,
+          type: typeof type === 'string' ? type : '',
+          size: typeof size === 'number' ? size : 0,
+          isImage: Boolean(isImage),
+          isText: Boolean(isText),
+          data: '',
+          preview: null,
+        }));
+    }
+    return base;
   }
 
   return null;
@@ -298,7 +372,7 @@ const MODE_BUBBLE_COLORS = {
   cloud: { bg: 'rgba(0,200,255,0.28)',   border: 'rgba(0,200,255,0.68)'   },
 };
 
-function UserBubble({ text, mode, longPressHandlers }) {
+function UserBubble({ text, mode, longPressHandlers, attachments }) {
   const colors = MODE_BUBBLE_COLORS[mode];
   return (
     <div className="flex justify-end" {...(longPressHandlers || {})}>
@@ -308,6 +382,34 @@ function UserBubble({ text, mode, longPressHandlers }) {
           ? { backgroundColor: colors.bg, border: `1px solid ${colors.border}` }
           : { backgroundColor: 'var(--color-vscode-accent-20)', border: '1px solid var(--color-vscode-accent-40)' }}
       >
+        {attachments && attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {attachments.map((att) =>
+              att.isImage && att.preview ? (
+                <img
+                  key={att.id}
+                  src={att.preview}
+                  alt={att.name}
+                  title={att.name}
+                  className="max-h-32 max-w-[160px] rounded-lg object-cover border border-black/20"
+                />
+              ) : (
+                <div
+                  key={att.id}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] border border-black/20 bg-black/15 max-w-[160px]"
+                  title={att.name}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 shrink-0" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  <span className="truncate">{att.name}</span>
+                  <span className="shrink-0 opacity-60">{formatFileSize(att.size)}</span>
+                </div>
+              )
+            )}
+          </div>
+        )}
         <div className="whitespace-pre-wrap">{text}</div>
       </div>
     </div>
@@ -836,6 +938,8 @@ export default function AgentView({ onOpenDiffFiles }) {
   const composerTextareaRef = useRef(null);
   const cloudJobStatusRef = useRef({});
   const [composerTextareaHeight, setComposerTextareaHeight] = useState(46);
+  const [attachments, setAttachments] = useState([]);
+  const fileInputRef = useRef(null);
 
   const composerCounts = useMemo(() => {
     const trimmed = input.trim();
@@ -1124,6 +1228,9 @@ export default function AgentView({ onOpenDiffFiles }) {
           provider: normalizeProvider(msg.provider),
           aiMode: normalizeMode(msg.aiMode),
           isTimeout: msg.isTimeout || false,
+          attachments: Array.isArray(msg.attachments)
+            ? msg.attachments.map(({ id, name, type, size, isImage, isText }) => ({ id, name, type, size, isImage, isText }))
+            : undefined,
         };
       });
     writeJson(CHAT_MESSAGES_KEY, safeMessages);
@@ -1227,9 +1334,21 @@ export default function AgentView({ onOpenDiffFiles }) {
     }
   }
 
+  async function handleFileSelect(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    e.target.value = '';
+    const newAttachments = await Promise.all(files.map(readAttachmentFile));
+    setAttachments((prev) => [...prev, ...newAttachments]);
+  }
+
+  function removeAttachment(id) {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
   async function sendPrompt(promptText) {
     const prompt = String(promptText || '').trim();
-    if (!prompt || streaming) return;
+    if ((!prompt && attachments.length === 0) || streaming) return;
 
     const requestAiMode = normalizeMode(readText(CHAT_UI_AGENT_KEY, 'agent')) || 'agent';
     const requestProvider = normalizeProvider(readText(CHAT_UI_PROVIDER_KEY, 'Copilot'));
@@ -1239,13 +1358,15 @@ export default function AgentView({ onOpenDiffFiles }) {
     const latestPlanText = getLatestPlanResponseText(messages, turnAiModes);
     const planChoice = resolvePlanContinuationChoice(prompt);
     const outgoingPrompt = buildModeSwitchContinuationPrompt(prompt, requestAiMode, latestPlanText, planChoice);
+    const currentAttachments = attachments.length > 0 ? attachments : undefined;
 
     if (runAsCloud) {
       setInput('');
+      setAttachments([]);
       setReasoning('');
       setTurnAiModes((prev) => ({ ...prev, [turnId]: requestAiMode }));
       setTurnProviders((prev) => ({ ...prev, [turnId]: requestProvider }));
-      setMessages((prev) => [...prev, { id: createMessageId(), turnId, role: 'user', text: prompt, aiMode: requestAiMode }]);
+      setMessages((prev) => [...prev, { id: createMessageId(), turnId, role: 'user', text: prompt, aiMode: requestAiMode, attachments: currentAttachments }]);
       scheduleDelayedScrollToBottom(120);
 
       try {
@@ -1292,11 +1413,12 @@ export default function AgentView({ onOpenDiffFiles }) {
       setReviewActionMsg('');
 
     setInput('');
+    setAttachments([]);
     setReasoning('');
     setStreaming(true);
 
     // Append user message
-    setMessages((prev) => [...prev, { id: createMessageId(), turnId, role: 'user', text: prompt, aiMode: requestAiMode }]);
+    setMessages((prev) => [...prev, { id: createMessageId(), turnId, role: 'user', text: prompt, aiMode: requestAiMode, attachments: currentAttachments }]);
     scheduleDelayedScrollToBottom(250);
 
     // Text bubbles are created on demand as delta events arrive.
@@ -1307,6 +1429,7 @@ export default function AgentView({ onOpenDiffFiles }) {
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const requestTimeoutId = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       setTurnAiModes((prev) => ({ ...prev, [turnId]: requestAiMode }));
@@ -1314,7 +1437,7 @@ export default function AgentView({ onOpenDiffFiles }) {
       const res = await fetch(apiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: outgoingPrompt, aiMode: requestAiMode, provider: requestProvider }),
+        body: JSON.stringify({ message: outgoingPrompt, aiMode: requestAiMode, provider: requestProvider, attachments: currentAttachments }),
         signal: ctrl.signal,
       });
 
@@ -1541,6 +1664,7 @@ export default function AgentView({ onOpenDiffFiles }) {
         ]);
       }
     } finally {
+      clearTimeout(requestTimeoutId);
       finalizePendingToolCalls(turnId);
       activeTurnRef.current = null;
       setActiveTurnId(null);
@@ -1952,6 +2076,7 @@ export default function AgentView({ onOpenDiffFiles }) {
                 <UserBubble
                   text={item.message.text}
                   mode={mode}
+                  attachments={item.message.attachments}
                   longPressHandlers={buildLongPressHandlers({
                     text: item.message.text,
                     allowRetry,
@@ -2204,6 +2329,14 @@ export default function AgentView({ onOpenDiffFiles }) {
         className="border-t border-vscode-border px-2.5 sm:px-3 py-2"
         style={{ backgroundColor: 'var(--color-vscode-bg)' }}
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,text/*,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rb,.php,.swift,.kt,.rs,.json,.yaml,.yml,.toml,.xml,.md,.sh,.env,.css,.html,.vue,.svelte,.graphql,.sql"
+          className="hidden"
+          onChange={handleFileSelect}
+        />
         <div className="rounded-lg border border-vscode-border" style={{ backgroundColor: { agent: 'rgba(100,200,100,0.05)', ask: 'rgba(255,165,0,0.05)', plan: 'rgba(100,150,255,0.05)', cloud: 'rgba(0,200,255,0.06)' }[aiMode] ?? 'rgba(255,255,255,0.02)' }}>
           {totalsForHeader.files > 0 && (
             <div className="flex items-center gap-2 px-2.5 py-2 border-b border-vscode-border select-none">
@@ -2262,7 +2395,59 @@ export default function AgentView({ onOpenDiffFiles }) {
             </div>
           )}
 
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-2.5 pt-2 pb-1 border-b border-vscode-border">
+              {attachments.map((att) =>
+                att.isImage && att.preview ? (
+                  <div key={att.id} className="relative group">
+                    <img
+                      src={att.preview}
+                      alt={att.name}
+                      title={att.name}
+                      className="h-14 w-14 rounded-lg object-cover border border-vscode-border"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(att.id)}
+                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-vscode-bg border border-vscode-border text-vscode-text-muted hover:text-vscode-text flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Remove"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-2.5 h-2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                ) : (
+                  <div key={att.id} className="relative group flex items-center gap-1 pl-2 pr-6 py-1 rounded-md border border-vscode-border bg-vscode-sidebar text-vscode-text-muted text-[11px] max-w-[160px]">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 shrink-0" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    <span className="truncate" title={att.name}>{att.name}</span>
+                    <span className="shrink-0 opacity-60">{formatFileSize(att.size)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(att.id)}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full hover:bg-vscode-border text-vscode-text-muted hover:text-vscode-text flex items-center justify-center"
+                      title="Remove"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-2 h-2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                )
+              )}
+            </div>
+          )}
+
           <div className="flex items-end min-h-[46px]">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming}
+              className="flex items-center justify-center w-8 h-8 ml-1 mb-1 shrink-0 rounded-lg text-vscode-text-muted hover:text-vscode-text hover:bg-vscode-border/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Attach files or photos"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
             <textarea
               ref={composerTextareaRef}
               value={input}
@@ -2294,7 +2479,7 @@ export default function AgentView({ onOpenDiffFiles }) {
               )}
               <button
                 type="button"
-                disabled={!streaming && !input.trim()}
+                disabled={!streaming && !input.trim() && attachments.length === 0}
                 className="relative flex items-center justify-center h-[48px] w-[48px] rounded-lg border border-vscode-border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40 disabled:cursor-not-allowed select-none"
                 style={{
                   background: { agent: 'rgba(100,200,100,0.14)', ask: 'rgba(255,165,0,0.14)', plan: 'rgba(100,150,255,0.14)', cloud: 'rgba(0,200,255,0.14)' }[aiMode] ?? 'rgba(255,255,255,0.05)',

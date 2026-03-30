@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
+// ─── Nav bar spacing ──────────────────────────────────────────────────────────
+// Tweak these to adjust gaps around the floating nav bar.
+const NAV_TOP_GAP_PX = 8;       // gap between content area and top of nav bar
+const NAV_BOTTOM_GAP_PX = 20;   // space below nav bar when keyboard is closed (0 when open)
+const NAV_SIDE_MARGIN_PX = 16;  // left/right margin that makes the nav bar "float"
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Keep layout height fixed to window.innerHeight so keyboard open/close does
 // not apply keyboard-based viewport padding behavior.
 function useAppViewportHeight() {
@@ -204,9 +211,8 @@ export default function Layout({ activeTab, onTabChange, children }) {
   const { keyboardOpen } = useAppViewportHeight();
   const layoutRef = useRef(null);
   const touchStartYRef = useRef(null);
-  const navBottomOffsetPx = keyboardOpen ? 0 : 20;
-  const topSafeExtraPx = 0
-  const navTopGapPx = 8;
+  const navBottomOffsetPx = keyboardOpen ? 0 : NAV_BOTTOM_GAP_PX;
+  const topSafeExtraPx = 0;
   const activeTabIndex = Math.max(0, TAB_ITEMS.findIndex((tab) => tab.id === activeTab));
 
   function findScrollableAncestor(startNode, boundaryNode) {
@@ -319,6 +325,7 @@ export default function Layout({ activeTab, onTabChange, children }) {
       {/* ── Bottom Navigation Bar ── */}
       <nav
         aria-label="Main navigation"
+        className="flex shrink-0 self-center select-none"
         style={{
           position: 'relative',
           backgroundColor: 'rgba(13, 13, 15, 0.75)',
@@ -328,13 +335,12 @@ export default function Layout({ activeTab, onTabChange, children }) {
           borderRadius: 9999,
           boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
           padding: '2px',
-          marginLeft: 16,
-          marginRight: 16,
-          marginTop: navTopGapPx,
-          // Positive value adds space below the nav bar.
+          marginLeft: NAV_SIDE_MARGIN_PX,
+          marginRight: NAV_SIDE_MARGIN_PX,
+          marginTop: NAV_TOP_GAP_PX,
           marginBottom: `${navBottomOffsetPx}px`,
+          width: `calc(100% - ${NAV_SIDE_MARGIN_PX * 2}px)`,
         }}
-        className="flex shrink-0 self-center w-[calc(100%-32px)] select-none"
       >
         <span
           aria-hidden="true"

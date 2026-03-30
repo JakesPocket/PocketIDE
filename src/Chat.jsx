@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { apiUrl } from './config/server';
 import { readJson, writeJson, readText, writeText } from './utils/persist';
 
+const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 const CHAT_MESSAGES_KEY = 'pocketide.chat.messages.v1';
 const CHAT_INPUT_KEY = 'pocketide.chat.input.v1';
 const CHAT_PENDING_REVIEW_KEY = 'pocketide.chat.pendingReviewPaths.v1';
@@ -1256,6 +1258,7 @@ export default function ChatView({ onOpenDiffFiles }) {
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const requestTimeoutId = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       setTurnAiModes((prev) => ({ ...prev, [turnId]: requestAiMode }));
@@ -1489,6 +1492,7 @@ export default function ChatView({ onOpenDiffFiles }) {
         ]);
       }
     } finally {
+      clearTimeout(requestTimeoutId);
       finalizePendingToolCalls(turnId);
       activeTurnRef.current = null;
       setActiveTurnId(null);

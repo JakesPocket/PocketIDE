@@ -4,12 +4,19 @@ const { Server } = require('socket.io');
 const pty = require('node-pty');
 const cors = require('cors');
 
+const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 // Placeholder chat endpoint
 app.post('/api/chat', (req, res) => {
-    res.json({ reply: 'Al is thinking..!' });
+    const { message, aiMode, provider, attachments } = req.body;
+    const attachmentCount = Array.isArray(attachments) ? attachments.length : 0;
+    const reply = attachmentCount > 0
+        ? `AI is thinking..! (received ${attachmentCount} attachment${attachmentCount > 1 ? 's' : ''})`
+        : 'AI is thinking..!';
+    res.json({ reply });
 });
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -42,6 +49,10 @@ io.on('connection', (socket) => {
         shell.kill();
     });
 });
+
+server.timeout = REQUEST_TIMEOUT_MS;
+server.headersTimeout = REQUEST_TIMEOUT_MS + 1000;
+server.requestTimeout = REQUEST_TIMEOUT_MS + 1000;
 
 server.listen(3000, () => {
     console.log('Bridge API running on port 3000');
