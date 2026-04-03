@@ -213,8 +213,8 @@ function RepoGitPanel({ repo, isExpanded, onToggle }) {
   }
 
   useEffect(() => {
-    if (!isExpanded) return;
     fetchStatus();
+    if (!isExpanded) return;
     fetchBranches();
   }, [isExpanded, fetchStatus, fetchBranches]);
 
@@ -808,31 +808,31 @@ export default function WorkspaceView({ onOpenFile }) {
 
       {/* Content */}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
-        {activeSubTab === 'file-explorer' && (
-          <>
-            {loading && (
-              <div className="flex items-center gap-2 px-3 py-4 text-vscode-text-muted text-sm">
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2">
-                  <path d="M21 12a9 9 0 11-6.22-8.56" strokeLinecap="round" />
-                </svg>
-                Loading…
-              </div>
-            )}
+        <div className={activeSubTab === 'file-explorer' ? 'h-full min-h-0' : 'hidden h-full min-h-0'}>
+          {loading && (
+            <div className="flex items-center gap-2 px-3 py-4 text-vscode-text-muted text-sm">
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2">
+                <path d="M21 12a9 9 0 11-6.22-8.56" strokeLinecap="round" />
+              </svg>
+              Loading…
+            </div>
+          )}
 
-            {error && (
-              <p className="px-3 py-4 text-sm text-red-400">
-                Error: {error}
-              </p>
-            )}
+          {error && (
+            <p className="px-3 py-4 text-sm text-red-400">
+              Error: {error}
+            </p>
+          )}
 
-            {!loading && !error && fileTree && (
-              <FileNode node={fileTree} depth={0} onOpenFile={onOpenFile} />
-            )}
-          </>
-        )}
+          {!loading && !error && fileTree && (
+            <FileNode node={fileTree} depth={0} onOpenFile={onOpenFile} />
+          )}
+        </div>
 
-        {activeSubTab === 'source-control' && <GitView />}
+        <div className={activeSubTab === 'source-control' ? 'h-full min-h-0' : 'hidden h-full min-h-0'}>
+          <GitView />
+        </div>
       </div>
     </div>
   );

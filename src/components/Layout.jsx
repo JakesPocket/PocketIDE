@@ -36,15 +36,20 @@ function useAppViewportHeight() {
       return {
         height: fallbackHeight,
         keyboardOpen: false,
+        keyboardInset: 0,
       };
     }
 
     const visible = Math.max(0, Math.round(vv.height));
+    const offsetTop = Math.max(0, Math.round(vv.offsetTop || 0));
     if (visible > baselineVvHeightRef.current) {
       baselineVvHeightRef.current = visible;
     }
     const baseline = baselineVvHeightRef.current || visible;
     const keyboardOpen = visible < baseline - 120;
+    const keyboardInset = keyboardOpen
+      ? Math.max(0, baseline - (visible + offsetTop))
+      : 0;
 
     // Freeze the shell height while the keyboard is open. Safari already pans the
     // visual viewport to reveal the focused control; shrinking the entire app at the
@@ -52,6 +57,7 @@ function useAppViewportHeight() {
     return {
       height: keyboardOpen ? baseline : visible,
       keyboardOpen,
+      keyboardInset,
     };
   }
 
@@ -60,6 +66,7 @@ function useAppViewportHeight() {
       return {
         height: 0,
         keyboardOpen: false,
+        keyboardInset: 0,
       };
     }
     return resolveViewportMetrics();
@@ -72,7 +79,8 @@ function useAppViewportHeight() {
       setMetrics((prev) => {
         const heightStable = Math.abs(prev.height - next.height) <= 1;
         const keyboardStable = prev.keyboardOpen === next.keyboardOpen;
-        return heightStable && keyboardStable ? prev : next;
+        const insetStable = Math.abs((prev.keyboardInset || 0) - (next.keyboardInset || 0)) <= 1;
+        return heightStable && keyboardStable && insetStable ? prev : next;
       });
     };
     const vv = window.visualViewport;
@@ -228,14 +236,15 @@ function TabIcon({ id, isActive }) {
 }
 
 export default function Layout({ activeTab, onTabChange, children }) {
-  const { keyboardOpen } = useAppViewportHeight();
+  const { keyboardOpen, keyboardInset } = useAppViewportHeight();
   const isStandaloneApp = useIsStandaloneApp();
   const layoutRef = useRef(null);
   const touchStartYRef = useRef(null);
   const navSpacing = isStandaloneApp ? NAV_SPACING_STANDALONE_PX : NAV_SPACING_BROWSER_PX;
-  const navBottomOffsetPx = keyboardOpen ? 8 : navSpacing.bottomGap;
+  const navBottomOffsetPx = keyboardOpen ? (8 + keyboardInset) : navSpacing.bottomGap;
   const navBottomDangerPushPx = keyboardOpen ? 0 : navSpacing.bottomDangerPush;
   const activeTabIndex = Math.max(0, TAB_ITEMS.findIndex((tab) => tab.id === activeTab));
+  const navMuted = keyboardOpen;
 
   function findScrollableAncestor(startNode, boundaryNode) {
     let target = startNode;
@@ -347,10 +356,10 @@ export default function Layout({ activeTab, onTabChange, children }) {
         className="flex shrink-0 self-center select-none"
         style={{
           position: 'relative',
-          backgroundColor: 'rgba(13, 13, 15, 0.75)',
-          backdropFilter: 'blur(20px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-          border: '1px solid rgba(255,255,255,0.10)',
+          backgroundColor: navMuted ? 'rgba(13, 13, 15, 0.62)' : 'rgba(13, 13, 15, 0.75)',
+          backdropFilter: navMuted ? 'blur(16px) saturate(150%)' : 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: navMuted ? 'blur(16px) saturate(150%)' : 'blur(20px) saturate(180%)',
+          border: navMuted ? '1px solid rgba(255,255,255,0.07)' : '1px solid rgba(255,255,255,0.10)',
           borderRadius: 9999,
           padding: '2px',
           marginLeft: navSpacing.sideMargin,
@@ -362,11 +371,13 @@ export default function Layout({ activeTab, onTabChange, children }) {
       >
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
+          className="pointer-events-none absolute rounded-full transition-transform duration-300 ease-out"
           style={{
+            top: 2,
+            bottom: 2,
             left: 2,
             width: 'calc((100% - 4px) / 5)',
-            background: 'rgba(255,255,255,0.10)',
+            background: navMuted ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.10)',
             transform: `translateX(${activeTabIndex * 100}%)`,
           }}
         />
@@ -383,6 +394,7 @@ export default function Layout({ activeTab, onTabChange, children }) {
                 border: 'none',
                 outline: 'none',
                 borderRadius: 9999,
+                opacity: navMuted ? (isActive ? 0.88 : 0.74) : 1,
               }}
               className={[
                 'flex-1 flex flex-col items-center justify-center gap-0.5 py-[3px]',
@@ -392,7 +404,10 @@ export default function Layout({ activeTab, onTabChange, children }) {
               ].join(' ')}
             >
               <TabIcon id={tab.id} isActive={isActive} />
-              <span className="text-[10px] leading-tight font-medium">{tab.label}</span>
+              <span className={[
+                'text-[10px] leading-tight font-medium transition-opacity',
+                navMuted ? 'opacity-75' : 'opacity-100',
+              ].join(' ')}>{tab.label}</span>
             </button>
           );
         })}
