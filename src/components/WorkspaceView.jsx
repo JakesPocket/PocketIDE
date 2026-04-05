@@ -713,9 +713,57 @@ function GitView() {
   );
 }
 
+function SearchView() {
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-y-contain">
+      <div className="px-4 py-8 text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 mb-4 rounded-full bg-vscode-sidebar-hover">
+          <svg className="w-8 h-8 text-vscode-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-medium text-vscode-text mb-2">Search</h3>
+        <p className="text-sm text-vscode-text-muted max-w-md mx-auto">
+          Search functionality coming soon. This will allow you to search for files and text across your workspace.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function IconFilesStack() {
+  return (
+    <svg viewBox="0 0 21 21" fill="none" stroke="currentColor" strokeLinecap="round"
+      strokeLinejoin="round" className="w-5 h-5" aria-hidden="true">
+      <g fillRule="evenodd" transform="translate(3 2)">
+        <path d="m14.5 12.5v-7l-5-5h-5c-1.1045695 0-2 .8954305-2 2v10c0 1.1045695.8954305 2 2 2h8c1.1045695 0 2-.8954305 2-2z" />
+        <path d="m9.5.5v3c0 1.1045695.8954305 2 2 2h3m-12-3c-1.1045695 0-2 .8954305-2 2v10c0 1.1045695.8954305 2 2 2h8c1.1045695 0 2-.8954305 2-2" />
+      </g>
+    </svg>
+  );
+}
+
+function IconSearchGlass() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5" aria-hidden="true">
+      <path d="M14.9536 14.9458L21 21M17 10C17 13.866 13.866 17 10 17C6.13401 17 3 13.866 3 10C3 6.13401 6.13401 3 10 3C13.866 3 17 6.13401 17 10Z" />
+    </svg>
+  );
+}
+
+function IconSourceControl() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5" aria-hidden="true">
+      <path d="M21.007 8.222A3.738 3.738 0 0 0 15.045 5.2a3.737 3.737 0 0 0 1.156 6.583 2.988 2.988 0 0 1-2.668 1.67h-2.99a4.456 4.456 0 0 0-2.989 1.165V7.4a3.737 3.737 0 1 0-1.494 0v9.117a3.776 3.776 0 1 0 1.816.099 2.99 2.99 0 0 1 2.668-1.667h2.99a4.484 4.484 0 0 0 4.223-3.039 3.736 3.736 0 0 0 3.25-3.687z" />
+    </svg>
+  );
+}
+
 const SUB_TABS = [
-  { id: 'file-explorer', label: 'Files' },
-  { id: 'source-control', label: 'Git' },
+  { id: 'file-explorer', label: 'Files', icon: IconFilesStack },
+  { id: 'source-control', label: 'Git', icon: IconSourceControl, badge: true },
+  { id: 'search', label: 'Search', icon: IconSearchGlass },
 ];
 
 export default function WorkspaceView({ onOpenFile }) {
@@ -726,6 +774,7 @@ export default function WorkspaceView({ onOpenFile }) {
   const [fileTree, setFileTree] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [gitChangesCount, setGitChangesCount] = useState(0);
 
   useEffect(() => {
     writeText(EXTENSIONS_TAB_KEY, activeSubTab);
@@ -745,6 +794,32 @@ export default function WorkspaceView({ onOpenFile }) {
       .finally(() => setLoading(false));
   }, [activeSubTab]);
 
+  // Count changes from git status
+  useEffect(() => {
+    const countChanges = async () => {
+      try {
+        const response = await fetch(apiUrl('/api/git/repos'));
+        const data = await response.json();
+        let totalChanges = 0;
+        if (Array.isArray(data.repos)) {
+          for (const repo of data.repos) {
+            const statusResponse = await fetch(apiUrl(`/api/git/status?repo=${encodeURIComponent(repo.id)}`));
+            if (statusResponse.ok) {
+              const status = await statusResponse.json();
+              const count = (status.staged?.length || 0) + (status.unstaged?.length || 0) + (status.untracked?.length || 0);
+              totalChanges += count;
+            }
+          }
+        }
+        setGitChangesCount(totalChanges);
+      } catch (e) {
+        // Silently fail if git status is unavailable
+        setGitChangesCount(0);
+      }
+    };
+    countChanges();
+  }, []);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Sub-tab bar */}
@@ -754,21 +829,31 @@ export default function WorkspaceView({ onOpenFile }) {
       >
         {SUB_TABS.map((tab) => {
           const isActive = activeSubTab === tab.id;
+          const IconComponent = tab.icon;
+          const badge = tab.badge && gitChangesCount > 0 ? gitChangesCount : null;
+          
           return (
             <button
               key={tab.id}
               onClick={() => setActiveSubTab(tab.id)}
               style={{ background: 'transparent', border: 'none', outline: 'none' }}
               className={[
-                'flex-1 py-3 text-sm font-medium transition-colors cursor-pointer',
+                'flex-1 py-3 px-2 text-sm font-medium transition-colors cursor-pointer',
                 'min-h-[44px]',
+                'flex items-center justify-center gap-2',
                 isActive
                   ? 'text-white border-b-2 border-vscode-accent'
                   : 'text-vscode-text-muted hover:text-vscode-text',
               ].join(' ')}
               aria-current={isActive ? 'true' : undefined}
             >
-              {tab.label}
+              <IconComponent />
+              <span>{tab.label}</span>
+              {badge && (
+                <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 ml-1 rounded-full bg-blue-500 text-white text-[10px] font-semibold">
+                  {badge}
+                </span>
+              )}
             </button>
           );
         })}
@@ -832,6 +917,10 @@ export default function WorkspaceView({ onOpenFile }) {
 
         <div className={activeSubTab === 'source-control' ? 'h-full min-h-0' : 'hidden h-full min-h-0'}>
           <GitView />
+        </div>
+
+        <div className={activeSubTab === 'search' ? 'h-full min-h-0' : 'hidden h-full min-h-0'}>
+          <SearchView />
         </div>
       </div>
     </div>

@@ -11,6 +11,13 @@ const AGENT_VIEW_BUILD = '2026-04-02-fresh-start';
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const CHAT_AUTO_CLOUD_AFTER_MS = 105 * 1000; // Promote long live streams to Cloud after 105s (1m 45s).
+const MESSAGE_LONG_PRESS_MIN_MS = 300;
+const MESSAGE_LONG_PRESS_MAX_MS = 800;
+const COMPOSER_MODE_HOLD_MS = 350;
+const DEFAULT_COMPOSER_PLACEHOLDER = 'What are you gonna do?';
+const ATTACHMENT_CONTEXT_HINT = 'provide context';
+const ATTACHMENT_CONTEXT_HINT_FADE_MS = 950;
+const ATTACHMENT_CONTEXT_HINT_CLEAR_MS = 240;
 
 const CHAT_MESSAGES_KEY = 'pocketcode.agent.messages.v1';
 const CHAT_INPUT_KEY = 'pocketcode.agent.input.v1';
@@ -26,6 +33,11 @@ const CHAT_VIEW_TAB_KEY = 'pocketcode.agent.activeSubTab.v1';
 function normalizeMode(value) {
   const mode = String(value || '').toLowerCase().trim();
   return ['agent', 'ask', 'plan', 'cloud'].includes(mode) ? mode : null;
+}
+
+function normalizeComposerMode(value) {
+  const mode = normalizeMode(value);
+  return mode === 'ask' || mode === 'plan' ? mode : 'agent';
 }
 
 function normalizeTab(value) {
@@ -281,7 +293,8 @@ function normalizeCloudJob(job) {
     jobId,
     provider: normalizeProvider(job.provider || 'copilot'),
     status: typeof job.status === 'string' ? job.status : 'queued',
-    aiMode: normalizeMode(job.aiMode) || 'cloud',
+    aiMode: normalizeComposerMode(job.aiMode),
+    executionMode: normalizeExecutionMode(job.executionMode || 'cloud'),
     message: typeof job.message === 'string' ? job.message : '',
     turnId: typeof job.turnId === 'string' ? job.turnId : null,
     resultText: typeof job.resultText === 'string' ? job.resultText : '',
@@ -414,6 +427,28 @@ const MODE_BUBBLE_COLORS = {
   ask:   { bg: 'rgba(255,165,0,0.34)',   border: 'rgba(255,165,0,0.72)'   },
   plan:  { bg: 'rgba(100,150,255,0.34)', border: 'rgba(100,150,255,0.72)' },
   cloud: { bg: 'rgba(0,200,255,0.28)',   border: 'rgba(0,200,255,0.68)'   },
+};
+
+const COMPOSER_BORDER_TINTS = {
+  agent: 'rgba(100,200,100,0.45)',
+  ask: 'rgba(255,165,0,0.5)',
+  plan: 'rgba(100,150,255,0.5)',
+};
+
+const COMPOSER_EXECUTION_SURFACE_TINTS = {
+  chat: 'var(--color-vscode-bg)',
+  cloud: 'rgba(255,255,255,0.08)',
+};
+
+const COMPOSER_EXECUTION_BUTTON_BACKGROUNDS = {
+  chat: 'var(--color-vscode-bg)',
+  cloud: 'rgba(255,255,255,0.16)',
+};
+
+const COMPOSER_BUTTON_TINTS = {
+  agent: { borderColor: 'rgba(100,200,100,0.9)', color: '#64c864' },
+  ask: { borderColor: 'rgba(255,165,0,1)', color: '#ffa500' },
+  plan: { borderColor: 'rgba(100,150,255,1)', color: '#6496ff' },
 };
 
 function UserBubble({ text, mode, longPressHandlers, attachments }) {
@@ -950,7 +985,7 @@ export default function AgentView({ onOpenDiffFiles }) {
   const [lastStreamEventAt, setLastStreamEventAt] = useState(0);
   const [streamClock, setStreamClock] = useState(0);
   const [quietStage, setQuietStage] = useState('thinking');
-  const [aiMode, setAiMode] = useState(() => readText(CHAT_UI_AGENT_KEY, 'agent'));
+  const [aiMode, setAiMode] = useState(() => normalizeComposerMode(readText(CHAT_UI_AGENT_KEY, 'agent')));
   const [currentProvider, setCurrentProvider] = useState(() => normalizeProvider(readText(CHAT_UI_PROVIDER_KEY, 'copilot')));
   const [turnAiModes, setTurnAiModes] = useState(readInitialTurnAiModes);
   const [turnProviders, setTurnProviders] = useState(readInitialTurnProviders);
@@ -969,10 +1004,14 @@ export default function AgentView({ onOpenDiffFiles }) {
   const submitLongPressRef = useRef(null);
   const longPressActivatedRef = useRef(false);
   const composerTextareaRef = useRef(null);
+  const composerHintHideTimerRef = useRef(null);
+  const composerHintClearTimerRef = useRef(null);
   const cloudJobStatusRef = useRef({});
   const wakeLockRef = useRef(null);
   const [composerTextareaHeight, setComposerTextareaHeight] = useState(46);
   const [attachments, setAttachments] = useState([]);
+  const [composerHint, setComposerHint] = useState('');
+  const [composerHintVisible, setComposerHintVisible] = useState(false);
   const fileInputRef = useRef(null);
 
   const composerCounts = useMemo(() => {
@@ -1111,11 +1150,15 @@ export default function AgentView({ onOpenDiffFiles }) {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      const currentMode = readText(CHAT_UI_AGENT_KEY, 'agent');
+      const currentMode = normalizeComposerMode(readText(CHAT_UI_AGENT_KEY, 'agent'));
       setAiMode(currentMode);
     }, 500);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    writeText(CHAT_UI_AGENT_KEY, aiMode);
+  }, [aiMode]);
 
   useEffect(() => {
     const provider = normalizeProvider(readText(CHAT_UI_PROVIDER_KEY, 'copilot'));
@@ -1355,6 +1398,7 @@ export default function AgentView({ onOpenDiffFiles }) {
 
   useEffect(() => {
     writeText(CHAT_VIEW_TAB_KEY, viewTab);
+    writeText(CHAT_UI_EXEC_MODE_KEY, viewTab === 'cloud' ? 'cloud' : 'chat');
   }, [viewTab]);
 
   useEffect(() => {
@@ -1416,8 +1460,7 @@ export default function AgentView({ onOpenDiffFiles }) {
   }
 
   function selectAiMode(mode) {
-    writeText(CHAT_UI_AGENT_KEY, mode);
-    setAiMode(mode);
+    setAiMode(normalizeComposerMode(mode));
     closeContextMenu();
   }
 
@@ -1445,14 +1488,65 @@ export default function AgentView({ onOpenDiffFiles }) {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
+  function clearComposerHintTimers() {
+    if (composerHintHideTimerRef.current) {
+      clearTimeout(composerHintHideTimerRef.current);
+      composerHintHideTimerRef.current = null;
+    }
+    if (composerHintClearTimerRef.current) {
+      clearTimeout(composerHintClearTimerRef.current);
+      composerHintClearTimerRef.current = null;
+    }
+  }
+
+  function dismissComposerHint() {
+    clearComposerHintTimers();
+    setComposerHint('');
+    setComposerHintVisible(false);
+  }
+
+  function showAttachmentContextHint() {
+    clearComposerHintTimers();
+    setComposerHint(ATTACHMENT_CONTEXT_HINT);
+    setComposerHintVisible(true);
+    composerTextareaRef.current?.focus();
+
+    composerHintHideTimerRef.current = setTimeout(() => {
+      setComposerHintVisible(false);
+      composerHintHideTimerRef.current = null;
+      composerHintClearTimerRef.current = setTimeout(() => {
+        setComposerHint('');
+        composerHintClearTimerRef.current = null;
+      }, ATTACHMENT_CONTEXT_HINT_CLEAR_MS);
+    }, ATTACHMENT_CONTEXT_HINT_FADE_MS);
+  }
+
+  useEffect(() => () => {
+    if (composerHintHideTimerRef.current) {
+      clearTimeout(composerHintHideTimerRef.current);
+      composerHintHideTimerRef.current = null;
+    }
+    if (composerHintClearTimerRef.current) {
+      clearTimeout(composerHintClearTimerRef.current);
+      composerHintClearTimerRef.current = null;
+    }
+  }, []);
+
   async function sendPrompt(promptText) {
     const prompt = String(promptText || '').trim();
-    if ((!prompt && attachments.length === 0) || streaming) return;
+    if (streaming) return;
+    if (!prompt && attachments.length > 0) {
+      showAttachmentContextHint();
+      return;
+    }
+    if (!prompt) return;
 
-    const requestAiMode = normalizeMode(readText(CHAT_UI_AGENT_KEY, 'agent')) || 'agent';
+    dismissComposerHint();
+
+    const requestAiMode = normalizeComposerMode(readText(CHAT_UI_AGENT_KEY, 'agent'));
     const requestProvider = normalizeProvider(readText(CHAT_UI_PROVIDER_KEY, 'Copilot'));
     const requestExecutionMode = normalizeExecutionMode(readText(CHAT_UI_EXEC_MODE_KEY, 'Chat'));
-    const runAsCloud = requestExecutionMode === 'cloud' || requestAiMode === 'cloud';
+    const runAsCloud = requestExecutionMode === 'cloud';
     const turnId = createMessageId();
     const latestPlanText = getLatestPlanResponseText(messages, turnAiModes);
     const planChoice = resolvePlanContinuationChoice(prompt);
@@ -1469,7 +1563,7 @@ export default function AgentView({ onOpenDiffFiles }) {
       scheduleDelayedScrollToBottom(120);
 
       try {
-        const created = await createCloudJob(outgoingPrompt, turnId, requestProvider, currentAttachments);
+        const created = await createCloudJob(outgoingPrompt, turnId, requestAiMode, requestProvider, currentAttachments);
         setMessages((prev) => [
           ...prev,
           {
@@ -1540,7 +1634,7 @@ export default function AgentView({ onOpenDiffFiles }) {
           autoPromotedToCloud = true;
           ctrl.abort();
 
-          createCloudJob(outgoingPrompt, turnId, requestProvider, currentAttachments)
+          createCloudJob(outgoingPrompt, turnId, requestAiMode, requestProvider, currentAttachments)
             .then((created) => {
               setMessages((prev) => [
                 ...prev,
@@ -1903,7 +1997,7 @@ export default function AgentView({ onOpenDiffFiles }) {
         longPressRef.current = null;
         if (!state || state.cancelled) return;
         const elapsed = Date.now() - state.startedAt;
-        if (elapsed < 250 || elapsed > 800) return;
+        if (elapsed < MESSAGE_LONG_PRESS_MIN_MS || elapsed > MESSAGE_LONG_PRESS_MAX_MS) return;
         const selectedText = typeof window !== 'undefined' ? window.getSelection?.().toString() : '';
         if (selectedText) return;
         const maxX = typeof window !== 'undefined' ? window.innerWidth - 20 : e.clientX;
@@ -1947,19 +2041,15 @@ export default function AgentView({ onOpenDiffFiles }) {
         e.preventDefault(); // keep keyboard open on iOS
         if (e.button != null && e.button !== 0) return;
         if (streaming) return;
-        const target = e.currentTarget;
         const timerId = setTimeout(() => {
           const state = submitLongPressRef.current;
           if (!state || state.cancelled) return;
           submitLongPressRef.current = null;
           longPressActivatedRef.current = true;
-          const rect = target.getBoundingClientRect();
           setContextMenu({
             type: 'modeSelect',
-            x: rect.left + rect.width / 2,
-            y: rect.top,
           });
-        }, 350);
+        }, COMPOSER_MODE_HOLD_MS);
         submitLongPressRef.current = {
           timerId,
           startX: e.clientX,
@@ -1988,7 +2078,7 @@ export default function AgentView({ onOpenDiffFiles }) {
         clearTimeout(state.timerId);
         submitLongPressRef.current = null;
         if (!state.cancelled && !longPressActivatedRef.current) {
-          if (input.trim()) sendPrompt(input);
+          sendPrompt(input);
         }
         longPressActivatedRef.current = false;
       },
@@ -2110,7 +2200,7 @@ export default function AgentView({ onOpenDiffFiles }) {
           role: job.status === 'failed' ? 'error' : 'agent',
           text: formatCloudStatusMessage(job),
           provider: normalizeProvider(job.provider || 'copilot'),
-          aiMode: 'cloud',
+          aiMode: normalizeComposerMode(job.aiMode),
         });
       }
       return next;
@@ -2140,11 +2230,18 @@ export default function AgentView({ onOpenDiffFiles }) {
     return () => clearInterval(id);
   }, [fetchCloudJobs]);
 
-  async function createCloudJob(message, turnId, provider, attachments) {
+  async function createCloudJob(message, turnId, aiMode, provider, attachments) {
     const r = await fetch(apiUrl('/api/jobs'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, aiMode: 'cloud', turnId, provider, attachments }),
+      body: JSON.stringify({
+        message,
+        aiMode: normalizeComposerMode(aiMode),
+        executionMode: 'cloud',
+        turnId,
+        provider,
+        attachments,
+      }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
@@ -2223,6 +2320,11 @@ export default function AgentView({ onOpenDiffFiles }) {
     () => [...cloudJobs].sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0)),
     [cloudJobs]
   );
+  const composerExecutionMode = viewTab === 'cloud' ? 'cloud' : 'chat';
+  const composerSurfaceTint = COMPOSER_EXECUTION_SURFACE_TINTS[composerExecutionMode] ?? 'var(--color-vscode-bg)';
+  const composerButtonBackgroundTint = COMPOSER_EXECUTION_BUTTON_BACKGROUNDS[composerExecutionMode] ?? 'var(--color-vscode-bg)';
+  const composerBorderTint = COMPOSER_BORDER_TINTS[aiMode] ?? 'var(--color-vscode-border)';
+  const composerButtonTint = COMPOSER_BUTTON_TINTS[aiMode] ?? COMPOSER_BUTTON_TINTS.agent;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-build={AGENT_VIEW_BUILD}>
@@ -2230,30 +2332,38 @@ export default function AgentView({ onOpenDiffFiles }) {
       <div className="relative min-h-0 flex-1 overflow-hidden flex flex-col">
         <div className="px-2.5 pt-2 pb-1 border-b border-vscode-border flex items-center gap-1.5 select-none justify-between">
           <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setViewTab('chat')}
-              className="px-2.5 py-1 rounded-md text-xs"
-              style={{
-                border: '1px solid var(--color-vscode-border)',
-                background: viewTab === 'chat' ? 'var(--color-vscode-sidebar)' : 'transparent',
-                color: 'var(--color-vscode-text)',
-              }}
+            <div
+              className="inline-flex items-end gap-1 border-b border-vscode-border/80"
+              role="tablist"
+              aria-label="Agent tabs"
             >
-              Chat
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewTab('cloud')}
-              className="px-2.5 py-1 rounded-md text-xs"
-              style={{
-                border: '1px solid var(--color-vscode-border)',
-                background: viewTab === 'cloud' ? 'var(--color-vscode-sidebar)' : 'transparent',
-                color: 'var(--color-vscode-text)',
-              }}
-            >
-              Cloud ({cloudJobs.length})
-            </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewTab === 'chat'}
+                onClick={() => setViewTab('chat')}
+                className="px-3 py-1.5 rounded-t-lg text-xs font-medium border border-vscode-border border-b-0"
+                style={{
+                  background: viewTab === 'chat' ? 'var(--color-vscode-tab-active)' : 'rgba(255,255,255,0.02)',
+                  color: viewTab === 'chat' ? 'var(--color-vscode-text)' : 'var(--color-vscode-text-muted)',
+                }}
+              >
+                Chat
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewTab === 'cloud'}
+                onClick={() => setViewTab('cloud')}
+                className="px-3 py-1.5 rounded-t-lg text-xs font-medium border border-vscode-border border-b-0"
+                style={{
+                  background: viewTab === 'cloud' ? 'var(--color-vscode-tab-active)' : 'rgba(255,255,255,0.02)',
+                  color: viewTab === 'cloud' ? 'var(--color-vscode-text)' : 'var(--color-vscode-text-muted)',
+                }}
+              >
+                Cloud
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-1.5 text-vscode-text opacity-70">
             <ProviderIcon provider={currentProvider} className="w-4 h-4" />
@@ -2329,7 +2439,7 @@ export default function AgentView({ onOpenDiffFiles }) {
         <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 sm:p-4">
           {sortedCloudJobs.length === 0 ? (
             <div className="rounded-lg border border-vscode-border bg-vscode-sidebar/40 px-3 py-2 text-sm text-vscode-text-muted">
-              No cloud runs yet. Set Execution to Cloud and send a prompt to queue a background run.
+              No cloud runs yet. Send a prompt from this tab to queue a background run.
             </div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -2429,56 +2539,13 @@ export default function AgentView({ onOpenDiffFiles }) {
           </button>
         )}
 
-        {contextMenu && (
+        {contextMenu?.type === 'modeSelect' && (
+          <div className="fixed inset-0 z-[60]" onPointerDown={closeContextMenu} />
+        )}
+
+        {contextMenu && contextMenu.type !== 'modeSelect' && (
           <div className="fixed inset-0 z-[60]" onPointerDown={closeContextMenu}>
-            {contextMenu.type === 'modeSelect' ? (() => {
-              const menuW = 210;
-              const menuH = 168;
-              const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-              const vx = vv ? vv.offsetLeft : 0;
-              const vy = vv ? vv.offsetTop : 0;
-              const vw = vv ? vv.width : (typeof window !== 'undefined' ? window.innerWidth : 400);
-              const vh = vv ? vv.height : (typeof window !== 'undefined' ? window.innerHeight : 800);
-              const left = Math.max(vx + 8, Math.min(contextMenu.x - menuW / 2, vx + vw - menuW - 8));
-              const top  = Math.max(vy + 8, Math.min(contextMenu.y - menuH - 10, vy + vh - menuH - 8));
-              return (
-                <div
-                  className="absolute rounded-xl border border-vscode-border bg-vscode-bg/95 shadow-xl p-1.5 select-none"
-                  style={{ left, top, width: menuW }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                >
-                  <p className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider text-vscode-text-muted">AI Mode</p>
-                  {[
-                    { id: 'agent', label: 'Agent', desc: 'Autonomous execution',   color: MODE_BUBBLE_COLORS.agent },
-                    { id: 'ask',   label: 'Ask',   desc: 'Approval before actions', color: MODE_BUBBLE_COLORS.ask   },
-                    { id: 'plan',  label: 'Plan',  desc: 'Show plan first',         color: MODE_BUBBLE_COLORS.plan  },
-                    { id: 'cloud', label: 'Cloud', desc: 'Queue background job',    color: MODE_BUBBLE_COLORS.cloud },
-                  ].map(({ id, label, desc, color }) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => selectAiMode(id)}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-vscode-sidebar/60 flex items-center gap-2.5"
-                      style={{ background: aiMode === id ? color.bg : 'transparent', border: 'none', outline: 'none', cursor: 'pointer' }}
-                    >
-                      <span
-                        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-                        style={{ background: color.border }}
-                      />
-                      <span>
-                        <span className="block text-vscode-text font-medium leading-tight">{label}</span>
-                        <span className="block text-[11px] text-vscode-text-muted leading-tight mt-0.5">{desc}</span>
-                      </span>
-                      {aiMode === id && (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 ml-auto text-vscode-text flex-shrink-0">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              );
-            })() : (() => {
+            {(() => {
               const menuW = 160;
               const menuH = contextMenu.allowRetry ? 88 : 44;
               const vv = typeof window !== 'undefined' ? window.visualViewport : null;
@@ -2522,7 +2589,7 @@ export default function AgentView({ onOpenDiffFiles }) {
 
       <form
         onSubmit={handleSend}
-        className="shrink-0 border-t border-vscode-border px-2.5 sm:px-3 py-2"
+        className="shrink-0 border-t border-vscode-border px-2.5 sm:px-3 pt-2 pb-0"
         style={{ backgroundColor: 'var(--color-vscode-bg)' }}
       >
         <input
@@ -2533,7 +2600,13 @@ export default function AgentView({ onOpenDiffFiles }) {
           className="hidden"
           onChange={handleFileSelect}
         />
-        <div className="rounded-lg border border-vscode-border" style={{ backgroundColor: { agent: 'rgba(100,200,100,0.05)', ask: 'rgba(255,165,0,0.05)', plan: 'rgba(100,150,255,0.05)', cloud: 'rgba(0,200,255,0.06)' }[aiMode] ?? 'rgba(255,255,255,0.02)' }}>
+        <div
+          className="rounded-lg border"
+          style={{
+            backgroundColor: composerSurfaceTint,
+            borderColor: composerBorderTint,
+          }}
+        >
           {totalsForHeader.files > 0 && (
             <div className="flex items-center gap-2 px-2.5 py-2 border-b border-vscode-border select-none">
             <button
@@ -2595,7 +2668,7 @@ export default function AgentView({ onOpenDiffFiles }) {
             <div className="flex flex-wrap gap-1.5 px-2.5 pt-2 pb-1 border-b border-vscode-border">
               {attachments.map((att) =>
                 att.isImage && att.preview ? (
-                  <div key={att.id} className="relative group">
+                  <div key={att.id} className="relative">
                     <img
                       src={att.preview}
                       alt={att.name}
@@ -2605,10 +2678,10 @@ export default function AgentView({ onOpenDiffFiles }) {
                     <button
                       type="button"
                       onClick={() => removeAttachment(att.id)}
-                      className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-vscode-bg border border-vscode-border text-vscode-text-muted hover:text-vscode-text flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border border-vscode-border bg-vscode-bg/90 text-vscode-text-muted shadow-sm hover:text-vscode-text"
                       title="Remove"
                     >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="w-2.5 h-2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="h-2.5 w-2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                   </div>
                 ) : (
@@ -2632,7 +2705,7 @@ export default function AgentView({ onOpenDiffFiles }) {
             </div>
           )}
 
-          <div className="flex items-end min-h-[46px]">
+          <div className="flex items-end min-h-[48px]">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -2644,23 +2717,38 @@ export default function AgentView({ onOpenDiffFiles }) {
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
             </button>
-            <textarea
-              ref={composerTextareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onFocus={preventScrollOnFocus}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend(e);
-                }
-              }}
-              placeholder="What are you gonna do?"
-              disabled={streaming}
-              rows={1}
-                className="flex-1 resize-none bg-transparent text-vscode-text placeholder-vscode-text-muted px-[5px] py-[2px] outline-none text-[16px] sm:text-sm min-h-[46px] max-h-[92px] overflow-y-auto overscroll-y-contain disabled:opacity-50 leading-relaxed -mt-px -mb-px"
-              style={{ fieldSizing: 'content' }}
-            />
+            <div className="relative min-h-[48px] flex-1">
+              {composerHint && !input && (
+                <div
+                  className={[
+                    'pointer-events-none absolute left-[5px] right-2 top-[2px] text-[16px] leading-relaxed sm:text-sm transition-opacity duration-200',
+                    composerHintVisible ? 'opacity-100 text-amber-300' : 'opacity-0 text-vscode-text-muted',
+                  ].join(' ')}
+                >
+                  {composerHint}
+                </div>
+              )}
+              <textarea
+                ref={composerTextareaRef}
+                value={input}
+                onChange={(e) => {
+                  if (composerHint) dismissComposerHint();
+                  setInput(e.target.value);
+                }}
+                onFocus={preventScrollOnFocus}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend(e);
+                  }
+                }}
+                placeholder={composerHint ? '' : DEFAULT_COMPOSER_PLACEHOLDER}
+                disabled={streaming}
+                rows={2}
+                  className="h-full w-full resize-none bg-transparent text-vscode-text placeholder-vscode-text-muted px-[5px] py-[2px] outline-none text-[16px] sm:text-sm min-h-[48px] overflow-y-auto overscroll-y-contain disabled:opacity-50 leading-snug -mt-px -mb-px"
+                style={{ fieldSizing: 'content' }}
+              />
+            </div>
             <div className="relative h-[48px] w-[48px] shrink-0 -mt-px -mr-px -mb-px select-none">
               {composerMetricVisibility.showChars && (
                 <div className={`absolute right-0 bottom-[48px] h-[22px] w-[48px] border border-vscode-border bg-vscode-sidebar/90 text-center text-[8px] leading-[1.05] text-vscode-text-muted ${composerMetricVisibility.showWords ? 'rounded-b-lg rounded-t-none' : 'rounded-lg'}`}>
@@ -2674,14 +2762,50 @@ export default function AgentView({ onOpenDiffFiles }) {
                   <div>words</div>
                 </div>
               )}
+              {contextMenu?.type === 'modeSelect' && (
+                <div
+                  className="absolute right-0 bottom-full z-[61] mb-0 w-[210px] rounded-xl border border-vscode-border bg-vscode-bg/95 shadow-xl p-1.5 select-none"
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <p className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider text-vscode-text-muted">AI Mode</p>
+                  {[
+                    { id: 'agent', label: 'Agent', desc: 'Autonomous execution',   color: MODE_BUBBLE_COLORS.agent },
+                    { id: 'ask',   label: 'Ask',   desc: 'Approval before actions', color: MODE_BUBBLE_COLORS.ask   },
+                    { id: 'plan',  label: 'Plan',  desc: 'Show plan first',         color: MODE_BUBBLE_COLORS.plan  },
+                  ].map(({ id, label, desc, color }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => selectAiMode(id)}
+                      className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-vscode-sidebar/60 flex items-center gap-2.5"
+                      style={{ background: aiMode === id ? color.bg : 'transparent', border: 'none', outline: 'none', cursor: 'pointer' }}
+                    >
+                      <span
+                        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ background: color.border }}
+                      />
+                      <span>
+                        <span className="block text-vscode-text font-medium leading-tight">{label}</span>
+                        <span className="block text-[11px] text-vscode-text-muted leading-tight mt-0.5">{desc}</span>
+                      </span>
+                      {aiMode === id && (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 ml-auto text-vscode-text flex-shrink-0">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button
                 type="button"
                 disabled={!streaming && !input.trim() && attachments.length === 0}
-                className="relative flex items-center justify-center h-[48px] w-[48px] rounded-lg border border-vscode-border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40 disabled:cursor-not-allowed select-none"
+                className="relative flex items-center justify-center h-[48px] w-[48px] rounded-lg border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40 disabled:cursor-not-allowed select-none"
                 style={{
-                  background: { agent: 'rgba(100,200,100,0.14)', ask: 'rgba(255,165,0,0.14)', plan: 'rgba(100,150,255,0.14)', cloud: 'rgba(0,200,255,0.14)' }[aiMode] ?? 'rgba(255,255,255,0.05)',
-                  borderColor: { agent: 'rgba(100,200,100,0.5)', ask: 'rgba(255,165,0,0.5)', plan: 'rgba(100,150,255,0.5)', cloud: 'rgba(0,200,255,0.55)' }[aiMode],
-                  color: { agent: '#64c864', ask: '#ffa500', plan: '#6496ff', cloud: '#00c8ff' }[aiMode],
+                  borderWidth: '1px',
+                  background: composerButtonBackgroundTint,
+                  borderColor: composerButtonTint.borderColor,
+                  color: composerButtonTint.color,
                   outline: 'none',
                 }}
                 title={streaming ? 'Stop' : 'Send (hold for mode)'}

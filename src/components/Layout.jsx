@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { readText } from '../utils/persist';
 import copilotIcon from '../assets/icons/providers/copilot.svg';
 import codexIcon from '../assets/icons/providers/codex.svg';
@@ -10,24 +10,29 @@ const NAV_TOP_GAP_PX = 8;
 const NAV_SIDE_MARGIN_PX = 16;
 
 const NAV_SPACING_BROWSER_PX = {
-  bottomGap: 5,
-  bottomDangerPush: 0,
+  bottomGap: 0,
+  bottomDangerPush: 26,
 };
 
 const NAV_SPACING_STANDALONE_PX = {
   bottomGap: 0,
-  bottomDangerPush: 10,
+  bottomDangerPush: 13,
 };
 
 const NAV_SPACING_KEYBOARD_OPEN_BROWSER_PX = {
-  bottomGap: 25,
-  bottomDangerPush: 32,
+  bottomGap: 0,
+  bottomDangerPush: 34,
 };
 
 const NAV_SPACING_KEYBOARD_OPEN_STANDALONE_PX = {
-  bottomGap: 25,
-  bottomDangerPush: 32,
+  bottomGap: 0,
+  bottomDangerPush: 34,
 };
+
+const IOS_LAUNCH_CORNER_RADIUS_PX = 52;
+const LAUNCH_BG_COLOR = '#000000';
+const RUNTIME_BG_COLOR = 'var(--color-vscode-bg)';
+const LAUNCH_SHELL_TRANSITION = 'background-color 360ms ease-out, border-radius 420ms cubic-bezier(0.22, 1, 0.36, 1)';
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Follow the current visual viewport so the app shell shrinks with the software
@@ -35,13 +40,17 @@ const NAV_SPACING_KEYBOARD_OPEN_STANDALONE_PX = {
 function useAppViewportHeight() {
   // Track a baseline visual viewport height for keyboard-open detection.
   const baselineVvHeightRef = useRef(0);
+  const stableClosedHeightRef = useRef(0);
 
   function resolveViewportMetrics() {
     const vv = window.visualViewport;
     if (!vv) {
       const fallbackHeight = Math.max(0, Math.round(window.innerHeight || 0));
+      if (fallbackHeight > stableClosedHeightRef.current) {
+        stableClosedHeightRef.current = fallbackHeight;
+      }
       return {
-        height: fallbackHeight,
+        height: stableClosedHeightRef.current || fallbackHeight,
         offsetTop: 0,
         keyboardOpen: false,
         keyboardInset: 0,
@@ -50,6 +59,8 @@ function useAppViewportHeight() {
 
     const visible = Math.max(0, Math.round(vv.height));
     const offsetTop = Math.max(0, Math.round(vv.offsetTop || 0));
+    const innerHeight = Math.max(0, Math.round(window.innerHeight || 0));
+    const closedViewportHeight = Math.max(visible + offsetTop, innerHeight);
     if (visible > baselineVvHeightRef.current) {
       baselineVvHeightRef.current = visible;
     }
@@ -59,9 +70,18 @@ function useAppViewportHeight() {
       ? Math.max(0, baseline - (visible + offsetTop))
       : 0;
 
+    if (!keyboardOpen && closedViewportHeight > stableClosedHeightRef.current) {
+      stableClosedHeightRef.current = closedViewportHeight;
+    }
+
+    const resolvedHeight = keyboardOpen
+      ? visible
+      : Math.max(stableClosedHeightRef.current || 0, closedViewportHeight || 0, visible || 0);
+    const resolvedOffsetTop = keyboardOpen ? offsetTop : 0;
+
     return {
-      height: visible,
-      offsetTop,
+      height: resolvedHeight,
+      offsetTop: resolvedOffsetTop,
       keyboardOpen,
       keyboardInset,
     };
@@ -147,6 +167,16 @@ function useIsStandaloneApp() {
   }, []);
 
   return isStandalone;
+}
+
+function isIOSDevice() {
+  if (typeof navigator === 'undefined') return false;
+
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  const maxTouchPoints = Number(navigator.maxTouchPoints || 0);
+
+  return /iPad|iPhone|iPod/i.test(ua) || (platform === 'MacIntel' && maxTouchPoints > 1);
 }
 
 // Icons as tiny inline components so there are no extra dependencies
@@ -252,6 +282,7 @@ export default function Layout({ activeTab, onTabChange, children }) {
   const isStandaloneApp = useIsStandaloneApp();
   const layoutRef = useRef(null);
   const touchStartYRef = useRef(null);
+  const [navVisible, setNavVisible] = useState(() => (typeof window === 'undefined'));
   const navSpacing = keyboardOpen
     ? (isStandaloneApp ? NAV_SPACING_KEYBOARD_OPEN_STANDALONE_PX : NAV_SPACING_KEYBOARD_OPEN_BROWSER_PX)
     : isStandaloneApp
@@ -263,6 +294,71 @@ export default function Layout({ activeTab, onTabChange, children }) {
   const navBottomDangerPushPx = navSpacing.bottomDangerPush;
   const activeTabIndex = Math.max(0, TAB_ITEMS.findIndex((tab) => tab.id === activeTab));
   const navMuted = keyboardOpen;
+  const launchLockActive = isStandaloneApp && isIOSDevice() && !navVisible;
+  const shellBackgroundColor = launchLockActive ? LAUNCH_BG_COLOR : RUNTIME_BG_COLOR;
+  const shellRadiusPx = launchLockActive ? `${IOS_LAUNCH_CORNER_RADIUS_PX}px` : '0px';
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const shouldLockForLaunch = isStandaloneApp && isIOSDevice();
+    if (!shouldLockForLaunch) {
+      setNavVisible(true);
+      return undefined;
+    }
+
+    let released = false;
+    let settleTimerId;
+    let fallbackTimerId;
+    const vv = window.visualViewport;
+
+    const release = () => {
+      if (released) return;
+      released = true;
+
+      if (settleTimerId) window.clearTimeout(settleTimerId);
+      if (fallbackTimerId) window.clearTimeout(fallbackTimerId);
+      if (vv) vv.removeEventListener('resize', onViewportResize);
+
+      setNavVisible(true);
+    };
+
+    function onViewportResize() {
+      if (settleTimerId) window.clearTimeout(settleTimerId);
+      // Wait for resize bursts to settle before revealing nav.
+      settleTimerId = window.setTimeout(release, 80);
+    }
+
+    setNavVisible(false);
+
+    if (vv) {
+      vv.addEventListener('resize', onViewportResize);
+    }
+
+    // Never block rendering forever if iOS doesn't emit a resize event.
+    fallbackTimerId = window.setTimeout(release, 700);
+
+    return () => {
+      if (settleTimerId) window.clearTimeout(settleTimerId);
+      if (fallbackTimerId) window.clearTimeout(fallbackTimerId);
+      if (vv) vv.removeEventListener('resize', onViewportResize);
+    };
+  }, [isStandaloneApp]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const launchBg = launchLockActive ? LAUNCH_BG_COLOR : '#181818';
+    const htmlEl = document.documentElement;
+    const bodyEl = document.body;
+    const rootEl = document.getElementById('root');
+
+    [htmlEl, bodyEl, rootEl].forEach((el) => {
+      if (!el) return;
+      el.style.backgroundColor = launchBg;
+      el.style.transition = 'background-color 360ms ease-out';
+    });
+  }, [launchLockActive]);
 
   function findScrollableAncestor(startNode, boundaryNode) {
     let target = startNode;
@@ -285,6 +381,14 @@ export default function Layout({ activeTab, onTabChange, children }) {
     return null;
   }
 
+  function isEditableTouchTarget(target) {
+    return Boolean(
+      target?.closest?.(
+        'input,textarea,select,[contenteditable="true"],[contenteditable=""],.cm-editor,.cm-content'
+      )
+    );
+  }
+
   useEffect(() => {
     const root = layoutRef.current;
     if (!root) return undefined;
@@ -294,6 +398,13 @@ export default function Layout({ activeTab, onTabChange, children }) {
     };
 
     const handleTouchMove = (e) => {
+      // Let native text selection handles and editable controls manage their own
+      // touch interactions. Preventing touchmove here breaks extending textarea
+      // selections on iOS.
+      if (isEditableTouchTarget(e.target)) {
+        return;
+      }
+
       const scrollableAncestor = findScrollableAncestor(e.target, root);
 
       // If we couldn't find a scrollable ancestor, prevent viewport-level scroll.
@@ -348,6 +459,9 @@ export default function Layout({ activeTab, onTabChange, children }) {
         height: resolvedShellHeight,
         maxHeight: resolvedShellHeight,
         marginTop: resolvedShellOffsetTop,
+        backgroundColor: shellBackgroundColor,
+        borderRadius: shellRadiusPx,
+        transition: LAUNCH_SHELL_TRANSITION,
         paddingTop: 'env(safe-area-inset-top, 0px)',
         paddingBottom: 0,
         overflow: 'hidden',
@@ -359,43 +473,46 @@ export default function Layout({ activeTab, onTabChange, children }) {
       <main
         className="min-h-0 flex-1"
         style={{
+          backgroundColor: shellBackgroundColor,
+          transition: 'background-color 360ms ease-out',
           overflow: 'hidden',
           overscrollBehavior: 'none',
           WebkitOverflowScrolling: 'auto',
         }}
       >
-        {children}
+        {navVisible ? children : null}
       </main>
 
       {/* ── Bottom Navigation Bar ── */}
-      <nav
-        aria-label="Main navigation"
-        className="flex shrink-0 self-center select-none"
-        style={{
-          position: 'relative',
-          backgroundColor: navMuted ? 'rgba(13, 13, 15, 0.62)' : 'rgba(13, 13, 15, 0.75)',
-          backdropFilter: navMuted ? 'blur(16px) saturate(150%)' : 'blur(20px) saturate(180%)',
-          WebkitBackdropFilter: navMuted ? 'blur(16px) saturate(150%)' : 'blur(20px) saturate(180%)',
-          border: navMuted ? '1px solid rgba(255,255,255,0.07)' : '1px solid rgba(255,255,255,0.10)',
-          borderRadius: 9999,
-          padding: keyboardOpen ? '0.5px' : '2px',
-          marginLeft: NAV_SIDE_MARGIN_PX,
-          marginRight: NAV_SIDE_MARGIN_PX,
-          marginTop: NAV_TOP_GAP_PX,
-          marginBottom: navBottomDangerPushPx
-            ? `calc(${navBottomOffsetPx} - ${navBottomDangerPushPx}px)`
-            : navBottomOffsetPx,
-          width: `calc(100% - ${NAV_SIDE_MARGIN_PX * 2}px)`,
-        }}
-      >
+      {navVisible && (
+        <nav
+          aria-label="Main navigation"
+          className="flex shrink-0 self-center select-none"
+          style={{
+            position: 'relative',
+            backgroundColor: navMuted ? 'rgba(13, 13, 15, 0.62)' : 'rgba(13, 13, 15, 0.75)',
+            backdropFilter: navMuted ? 'blur(16px) saturate(150%)' : 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: navMuted ? 'blur(16px) saturate(150%)' : 'blur(20px) saturate(180%)',
+            border: navMuted ? '1px solid rgba(255,255,255,0.07)' : '1px solid rgba(255,255,255,0.10)',
+            borderRadius: 9999,
+            padding: '2px',
+            marginLeft: NAV_SIDE_MARGIN_PX,
+            marginRight: NAV_SIDE_MARGIN_PX,
+            marginTop: NAV_TOP_GAP_PX,
+            marginBottom: navBottomDangerPushPx
+              ? `calc(${navBottomOffsetPx} - ${navBottomDangerPushPx}px)`
+              : navBottomOffsetPx,
+            width: `calc(100% - ${NAV_SIDE_MARGIN_PX * 2}px)`,
+          }}
+        >
         <span
           aria-hidden="true"
           className="pointer-events-none absolute rounded-full transition-transform duration-300 ease-out"
           style={{
-            top: keyboardOpen ? 0.5 : 2,
-            bottom: keyboardOpen ? 0.5 : 2,
-            left: keyboardOpen ? 0.5 : 2,
-            width: keyboardOpen ? 'calc((100% - 1px) / 5)' : 'calc((100% - 4px) / 5)',
+            top: 2,
+            bottom: 2,
+            left: 2,
+            width: 'calc((100% - 4px) / 5)',
             background: navMuted ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.10)',
             transform: `translateX(${activeTabIndex * 100}%)`,
           }}
@@ -403,35 +520,65 @@ export default function Layout({ activeTab, onTabChange, children }) {
         {TAB_ITEMS.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
-            <button
+            <div
               key={tab.id}
-              onClick={() => onTabChange(tab.id)}
-              aria-label={tab.label}
-              aria-current={isActive ? 'page' : undefined}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                borderRadius: 9999,
-                opacity: navMuted ? (isActive ? 0.88 : 0.74) : 1,
-              }}
               className={[
-                'flex-1 flex flex-col items-center justify-center transition-colors cursor-pointer overflow-visible',
-                'relative z-10',
-                keyboardOpen ? 'gap-0 py-[3px] min-h-[16px]' : 'gap-0.5 py-[3px] min-h-[50px]',
-                isActive ? 'text-vscode-accent' : 'text-vscode-text-muted',
+                'relative z-10 flex-1',
+                keyboardOpen ? 'min-h-[12px]' : 'min-h-[50px]',
               ].join(' ')}
             >
-              {!keyboardOpen && <TabIcon id={tab.id} isActive={isActive} />}
-              <span className={[
-                'font-medium transition-opacity',
-                keyboardOpen ? 'text-[11px] leading-none' : 'text-[10px] leading-tight',
-                navMuted ? 'opacity-75' : 'opacity-100',
-              ].join(' ')}>{tab.label}</span>
-            </button>
+              {keyboardOpen && (
+                <button
+                  type="button"
+                  onClick={() => onTabChange(tab.id)}
+                  aria-label={tab.label}
+                  aria-current={isActive ? 'page' : undefined}
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    top: -12,
+                    bottom: -12,
+                    background: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    borderRadius: 9999,
+                  }}
+                  className="cursor-pointer"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => onTabChange(tab.id)}
+                aria-label={tab.label}
+                aria-current={isActive ? 'page' : undefined}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  borderRadius: 9999,
+                  opacity: navMuted ? (isActive ? 0.88 : 0.74) : 1,
+                  pointerEvents: keyboardOpen ? 'none' : 'auto',
+                }}
+                className={[
+                  'w-full flex flex-col items-center justify-center transition-colors cursor-pointer overflow-visible',
+                  'relative',
+                  keyboardOpen ? 'gap-0 py-[3px] min-h-[12px]' : 'gap-0.5 py-[3px] min-h-[50px]',
+                  isActive ? 'text-vscode-accent' : 'text-vscode-text-muted',
+                ].join(' ')}
+              >
+                {!keyboardOpen && <TabIcon id={tab.id} isActive={isActive} />}
+                <span className={[
+                  'font-medium transition-opacity',
+                  keyboardOpen ? 'text-[11px] leading-none' : 'text-[10px] leading-tight',
+                  navMuted ? 'opacity-75' : 'opacity-100',
+                ].join(' ')}>{tab.label}</span>
+              </button>
+            </div>
           );
         })}
-      </nav>
+        </nav>
+      )}
     </div>
   );
 }
