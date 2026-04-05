@@ -11,7 +11,7 @@ const NAV_SIDE_MARGIN_PX = 16;
 
 const NAV_SPACING_BROWSER_PX = {
   bottomGap: 0,
-  bottomDangerPush: 26,
+  bottomDangerPush: 0,
 };
 
 const NAV_SPACING_STANDALONE_PX = {

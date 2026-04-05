@@ -16,8 +16,14 @@ const MESSAGE_LONG_PRESS_MAX_MS = 800;
 const COMPOSER_MODE_HOLD_MS = 350;
 const DEFAULT_COMPOSER_PLACEHOLDER = 'What are you gonna do?';
 const ATTACHMENT_CONTEXT_HINT = 'provide context';
-const ATTACHMENT_CONTEXT_HINT_FADE_MS = 950;
-const ATTACHMENT_CONTEXT_HINT_CLEAR_MS = 240;
+const ATTACHMENT_CONTEXT_HINT_FADE_MS = 1600;
+const ATTACHMENT_CONTEXT_HINT_CLEAR_MS = 300;
+const COMPOSER_MIN_HEIGHT_PX = 48;
+const COMPOSER_MAX_HEIGHT_PX = 92;
+const COMPOSER_ACTION_BUTTON_SIZE_PX = 50; // 48px inner + 1px border each side
+const COMPOSER_ACTION_BUTTON_OFFSET_X_PX = 1;
+const COMPOSER_ACTION_BUTTON_OFFSET_Y_PX = 1;
+const COPY_STATUS_TIMEOUT_MS = 1400;
 
 const CHAT_MESSAGES_KEY = 'pocketcode.agent.messages.v1';
 const CHAT_INPUT_KEY = 'pocketcode.agent.input.v1';
@@ -571,12 +577,39 @@ function TextBlock({ text }) {
   );
 }
 
+async function copyTextToClipboard(text) {
+  const textToCopy = String(text || '');
+  if (!textToCopy) return false;
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(textToCopy);
+      return true;
+    }
+
+    const ta = document.createElement('textarea');
+    ta.value = textToCopy;
+    ta.setAttribute('readonly', 'true');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return copied;
+  } catch (_) {
+    return false;
+  }
+}
+
 function CodeBlock({ code, lang }) {
   const [copied, setCopied] = useState(false);
 
   async function copyCode() {
     try {
-      await navigator.clipboard.writeText(code);
+      const copied = await copyTextToClipboard(code);
+      if (!copied) throw new Error('copy failed');
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -1006,12 +1039,12 @@ export default function AgentView({ onOpenDiffFiles }) {
   const composerTextareaRef = useRef(null);
   const composerHintHideTimerRef = useRef(null);
   const composerHintClearTimerRef = useRef(null);
+  const reviewActionMsgTimerRef = useRef(null);
   const cloudJobStatusRef = useRef({});
   const wakeLockRef = useRef(null);
-  const [composerTextareaHeight, setComposerTextareaHeight] = useState(46);
+  const [composerTextareaHeight, setComposerTextareaHeight] = useState(COMPOSER_MIN_HEIGHT_PX);
   const [attachments, setAttachments] = useState([]);
   const [composerHint, setComposerHint] = useState('');
-  const [composerHintVisible, setComposerHintVisible] = useState(false);
   const fileInputRef = useRef(null);
 
   const composerCounts = useMemo(() => {
@@ -1024,7 +1057,7 @@ export default function AgentView({ onOpenDiffFiles }) {
   }, [input]);
 
   const composerMetricVisibility = useMemo(() => {
-    const extraRoom = Math.max(0, composerTextareaHeight - 46);
+    const extraRoom = Math.max(0, composerTextareaHeight - COMPOSER_MIN_HEIGHT_PX);
     return {
       showChars: extraRoom >= 22,
       showWords: extraRoom >= 44,
@@ -1174,28 +1207,27 @@ export default function AgentView({ onOpenDiffFiles }) {
   useEffect(() => {
     const textarea = composerTextareaRef.current;
     if (!textarea) {
-      setComposerTextareaHeight(46);
+      setComposerTextareaHeight(COMPOSER_MIN_HEIGHT_PX);
       return;
     }
 
     const updateHeight = () => {
-      const next = Math.max(46, Math.round(textarea.getBoundingClientRect().height));
+      textarea.style.height = 'auto';
+      const next = Math.min(
+        COMPOSER_MAX_HEIGHT_PX,
+        Math.max(COMPOSER_MIN_HEIGHT_PX, Math.round(textarea.scrollHeight))
+      );
+      textarea.style.height = `${next}px`;
+      textarea.style.overflowY = next >= COMPOSER_MAX_HEIGHT_PX ? 'auto' : 'hidden';
       setComposerTextareaHeight(next);
     };
 
     updateHeight();
-    let observer = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(updateHeight);
-      observer.observe(textarea);
-    }
     window.addEventListener('resize', updateHeight);
-
     return () => {
-      if (observer) observer.disconnect();
       window.removeEventListener('resize', updateHeight);
     };
-  }, []);
+  }, [input]);
 
   useEffect(() => {
     if (typeof document === 'undefined' || typeof navigator === 'undefined') return undefined;
@@ -1467,10 +1499,11 @@ export default function AgentView({ onOpenDiffFiles }) {
   async function handleCopyFromContextMenu() {
     if (!contextMenu?.text) return;
     try {
-      await navigator.clipboard.writeText(contextMenu.text);
-      setReviewActionMsg('Copied to clipboard.');
+      const copied = await copyTextToClipboard(contextMenu.text);
+      if (!copied) throw new Error('copy failed');
+      showTimedReviewActionMsg('Copied to clipboard.');
     } catch (_) {
-      setReviewActionMsg('Could not copy to clipboard.');
+      showTimedReviewActionMsg('Could not copy to clipboard.');
     } finally {
       closeContextMenu();
     }
@@ -1499,20 +1532,33 @@ export default function AgentView({ onOpenDiffFiles }) {
     }
   }
 
+  function clearReviewActionMsgTimer() {
+    if (reviewActionMsgTimerRef.current) {
+      clearTimeout(reviewActionMsgTimerRef.current);
+      reviewActionMsgTimerRef.current = null;
+    }
+  }
+
+  function showTimedReviewActionMsg(message, timeoutMs = COPY_STATUS_TIMEOUT_MS) {
+    clearReviewActionMsgTimer();
+    setReviewActionMsg(message);
+    reviewActionMsgTimerRef.current = setTimeout(() => {
+      setReviewActionMsg('');
+      reviewActionMsgTimerRef.current = null;
+    }, timeoutMs);
+  }
+
   function dismissComposerHint() {
     clearComposerHintTimers();
     setComposerHint('');
-    setComposerHintVisible(false);
   }
 
   function showAttachmentContextHint() {
     clearComposerHintTimers();
     setComposerHint(ATTACHMENT_CONTEXT_HINT);
-    setComposerHintVisible(true);
     composerTextareaRef.current?.focus();
 
     composerHintHideTimerRef.current = setTimeout(() => {
-      setComposerHintVisible(false);
       composerHintHideTimerRef.current = null;
       composerHintClearTimerRef.current = setTimeout(() => {
         setComposerHint('');
@@ -1530,6 +1576,7 @@ export default function AgentView({ onOpenDiffFiles }) {
       clearTimeout(composerHintClearTimerRef.current);
       composerHintClearTimerRef.current = null;
     }
+    clearReviewActionMsgTimer();
   }, []);
 
   async function sendPrompt(promptText) {
@@ -2117,19 +2164,6 @@ export default function AgentView({ onOpenDiffFiles }) {
     });
   }
 
-  async function handleCopyReviewSummary() {
-    const files = displayFiles;
-    const header = `Files changed: ${totalsForHeader.files} +${totalsForHeader.added} -${totalsForHeader.removed}`;
-    const lines = files.slice(0, 100).map((file) => `${file.path} (+${file.added || 0} -${file.removed || 0})`);
-    const text = [header, ...lines].join('\n');
-    try {
-      await navigator.clipboard.writeText(text);
-      setReviewActionMsg('Copied change summary.');
-    } catch (_) {
-      setReviewActionMsg('Could not copy summary.');
-    }
-  }
-
   async function handleOpenAllEdits() {
     setReviewActionMsg('');
     try {
@@ -2705,29 +2739,26 @@ export default function AgentView({ onOpenDiffFiles }) {
             </div>
           )}
 
-          <div className="flex items-end min-h-[48px]">
+          <div
+            className="relative flex items-stretch"
+            style={{
+              minHeight: `${COMPOSER_MIN_HEIGHT_PX}px`,
+              height: `${composerTextareaHeight}px`,
+            }}
+          >
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={streaming}
-              className="flex items-center justify-center w-8 h-8 ml-1 mb-1 shrink-0 rounded-lg text-vscode-text-muted hover:text-vscode-text hover:bg-vscode-border/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="absolute left-1 flex h-8 w-8 items-center justify-center rounded-lg text-vscode-text-muted hover:text-vscode-text hover:bg-vscode-border/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              style={{ top: `${Math.round((COMPOSER_MIN_HEIGHT_PX - 32) / 2)}px` }}
               title="Attach files or photos"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
             </button>
-            <div className="relative min-h-[48px] flex-1">
-              {composerHint && !input && (
-                <div
-                  className={[
-                    'pointer-events-none absolute left-[5px] right-2 top-[2px] text-[16px] leading-relaxed sm:text-sm transition-opacity duration-200',
-                    composerHintVisible ? 'opacity-100 text-amber-300' : 'opacity-0 text-vscode-text-muted',
-                  ].join(' ')}
-                >
-                  {composerHint}
-                </div>
-              )}
+            <div className="relative ml-10 flex flex-1 items-stretch">
               <textarea
                 ref={composerTextareaRef}
                 value={input}
@@ -2742,24 +2773,37 @@ export default function AgentView({ onOpenDiffFiles }) {
                     handleSend(e);
                   }
                 }}
-                placeholder={composerHint ? '' : DEFAULT_COMPOSER_PLACEHOLDER}
+                placeholder={composerHint || DEFAULT_COMPOSER_PLACEHOLDER}
                 disabled={streaming}
-                rows={2}
-                  className="h-full w-full resize-none bg-transparent text-vscode-text placeholder-vscode-text-muted px-[5px] py-[2px] outline-none text-[16px] sm:text-sm min-h-[48px] overflow-y-auto overscroll-y-contain disabled:opacity-50 leading-snug -mt-px -mb-px"
-                style={{ fieldSizing: 'content' }}
+                rows={1}
+                className="w-full resize-none bg-transparent text-vscode-text placeholder-vscode-text-muted px-[5px] py-[2px] outline-none text-[16px] sm:text-sm overflow-y-hidden overscroll-y-contain disabled:opacity-50 leading-snug"
+                style={{
+                  minHeight: `${COMPOSER_MIN_HEIGHT_PX}px`,
+                  height: `${composerTextareaHeight}px`,
+                  maxHeight: `${COMPOSER_MAX_HEIGHT_PX}px`,
+                }}
               />
             </div>
-            <div className="relative h-[48px] w-[48px] shrink-0 -mt-px -mr-px -mb-px select-none">
-              {composerMetricVisibility.showChars && (
-                <div className={`absolute right-0 bottom-[48px] h-[22px] w-[48px] border border-vscode-border bg-vscode-sidebar/90 text-center text-[8px] leading-[1.05] text-vscode-text-muted ${composerMetricVisibility.showWords ? 'rounded-b-lg rounded-t-none' : 'rounded-lg'}`}>
-                  <div className="pt-[2px]">{composerCounts.chars}</div>
-                  <div>chars</div>
-                </div>
-              )}
-              {composerMetricVisibility.showWords && (
-                <div className="absolute right-0 bottom-[70px] h-[22px] w-[48px] rounded-t-lg rounded-b-none border border-vscode-border bg-vscode-sidebar/90 text-center text-[8px] leading-[1.05] text-vscode-text-muted">
-                  <div className="pt-[2px]">{composerCounts.words}</div>
-                  <div>words</div>
+            <div className="relative w-[48px] shrink-0 select-none">
+              {(composerMetricVisibility.showWords || composerMetricVisibility.showChars) && (
+                <div
+                  className={[
+                    'absolute right-0 top-0 flex w-[48px] flex-col overflow-hidden rounded-lg border border-vscode-border bg-vscode-sidebar/90 text-center text-[8px] leading-[1.05] text-vscode-text-muted',
+                    composerMetricVisibility.showWords && composerMetricVisibility.showChars ? 'h-[44px]' : 'h-[22px]',
+                  ].join(' ')}
+                >
+                  {composerMetricVisibility.showWords && (
+                    <div className={`flex-1 ${composerMetricVisibility.showChars ? 'border-b border-vscode-border' : ''}`}>
+                      <div className="pt-[2px]">{composerCounts.words}</div>
+                      <div>words</div>
+                    </div>
+                  )}
+                  {composerMetricVisibility.showChars && (
+                    <div className="flex-1">
+                      <div className="pt-[2px]">{composerCounts.chars}</div>
+                      <div>chars</div>
+                    </div>
+                  )}
                 </div>
               )}
               {contextMenu?.type === 'modeSelect' && (
@@ -2797,33 +2841,37 @@ export default function AgentView({ onOpenDiffFiles }) {
                   ))}
                 </div>
               )}
-              <button
-                type="button"
-                disabled={!streaming && !input.trim() && attachments.length === 0}
-                className="relative flex items-center justify-center h-[48px] w-[48px] rounded-lg border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40 disabled:cursor-not-allowed select-none"
-                style={{
-                  borderWidth: '1px',
-                  background: composerButtonBackgroundTint,
-                  borderColor: composerButtonTint.borderColor,
-                  color: composerButtonTint.color,
-                  outline: 'none',
-                }}
-                title={streaming ? 'Stop' : 'Send (hold for mode)'}
-                {...buildSubmitLongPressHandlers()}
-              >
-                {streaming ? (
-                  <>
-                    <span className="inline-block w-3 h-3 rounded-sm bg-current" />
-                    <span className="absolute inset-0 m-auto w-6 h-6 rounded-full border-2 border-vscode-border/70 border-t-vscode-text animate-spin pointer-events-none" />
-                  </>
-                ) : (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 mx-auto" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="19" x2="12" y2="5" />
-                    <polyline points="5 12 12 5 19 12" />
-                  </svg>
-                )}
-              </button>
             </div>
+            <button
+              type="button"
+              disabled={!streaming && !input.trim() && attachments.length === 0}
+              className="absolute bottom-0 right-0 flex items-center justify-center rounded-lg border text-vscode-text-muted hover:text-vscode-text disabled:opacity-40 disabled:cursor-not-allowed select-none"
+              style={{
+                width: `${COMPOSER_ACTION_BUTTON_SIZE_PX}px`,
+                height: `${COMPOSER_ACTION_BUTTON_SIZE_PX}px`,
+                right: `-${COMPOSER_ACTION_BUTTON_OFFSET_X_PX}px`,
+                bottom: `-${COMPOSER_ACTION_BUTTON_OFFSET_Y_PX}px`,
+                borderWidth: '1px',
+                background: composerButtonBackgroundTint,
+                borderColor: composerButtonTint.borderColor,
+                color: composerButtonTint.color,
+                outline: 'none',
+              }}
+              title={streaming ? 'Stop' : 'Send (hold for mode)'}
+              {...buildSubmitLongPressHandlers()}
+            >
+              {streaming ? (
+                <>
+                  <span className="inline-block w-3 h-3 rounded-sm bg-current" />
+                  <span className="absolute inset-0 m-auto w-6 h-6 rounded-full border-2 border-vscode-border/70 border-t-vscode-text animate-spin pointer-events-none" />
+                </>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 mx-auto" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="19" x2="12" y2="5" />
+                  <polyline points="5 12 12 5 19 12" />
+                </svg>
+              )}
+            </button>
           </div>
 
           {reviewActionMsg && (
