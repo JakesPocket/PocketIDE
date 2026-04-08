@@ -5,6 +5,9 @@ import localIcon from '../assets/icons/providers/local.svg';
 import { apiUrl } from '../config/server';
 import { readJson, writeJson, readText, writeText } from '../utils/persist';
 import { preventScrollOnFocus } from '../utils/preventScrollOnFocus';
+import TaskCard from './TaskCard.jsx';
+import TaskDetailView from './TaskDetailView.jsx';
+import ComposeModal from './ComposeModal.jsx';
 
 // Fresh-start rebuild marker for the AI Agent surface.
 const AGENT_VIEW_BUILD = '2026-04-02-fresh-start';
@@ -48,7 +51,7 @@ function normalizeComposerMode(value) {
 
 function normalizeTab(value) {
   const tab = String(value || '').toLowerCase().trim();
-  return tab === 'tasks' || tab === 'cloud' ? 'cloud' : 'chat';
+  return tab === 'chat' ? 'chat' : 'tasks';
 }
 
 function normalizeExecutionMode(value) {
@@ -110,6 +113,15 @@ function createMessageId() {
     return globalThis.crypto.randomUUID();
   }
   return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createTurnCode() {
+  const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -447,8 +459,8 @@ const COMPOSER_EXECUTION_SURFACE_TINTS = {
 };
 
 const COMPOSER_EXECUTION_BUTTON_BACKGROUNDS = {
-  chat: 'var(--color-vscode-bg)',
-  cloud: 'rgba(255,255,255,0.16)',
+  chat: '#181818',
+  cloud: '#181818',
 };
 
 const COMPOSER_BUTTON_TINTS = {
@@ -457,7 +469,7 @@ const COMPOSER_BUTTON_TINTS = {
   plan: { borderColor: 'rgba(100,150,255,1)', color: '#6496ff' },
 };
 
-function UserBubble({ text, mode, longPressHandlers, attachments }) {
+function UserBubble({ text, mode, longPressHandlers, attachments, turnCode }) {
   const colors = MODE_BUBBLE_COLORS[mode];
   const accent = colors?.border || 'var(--color-vscode-accent)';
   return (
@@ -499,6 +511,11 @@ function UserBubble({ text, mode, longPressHandlers, attachments }) {
           </div>
         )}
         <div className="whitespace-pre-wrap">{text}</div>
+        {turnCode && (
+          <div className="mt-1 text-right">
+            <span className="font-mono text-[10px] opacity-40">{turnCode}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1004,9 +1021,12 @@ export default function AgentView({ onOpenDiffFiles }) {
   const [messages, setMessages] = useState(() => readInitialMessages());
   const [reasoning, setReasoning] = useState('');
   const [input, setInput] = useState(() => readText(CHAT_INPUT_KEY, ''));
-  const [viewTab, setViewTab] = useState(() => normalizeTab(readText(CHAT_VIEW_TAB_KEY, 'chat')));
+  const [viewTab, setViewTab] = useState(() => normalizeTab(readText(CHAT_VIEW_TAB_KEY, 'tasks')));
   const [cloudJobs, setCloudJobs] = useState(readInitialCloudJobs);
   const [streaming, setStreaming] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [taskEvents, setTaskEvents] = useState({});
   const [changesSummary, setChangesSummary] = useState({ totals: { files: 0, added: 0, removed: 0 }, files: [] });
   const [changesOpen, setChangesOpen] = useState(false);
   const [changesLoading, setChangesLoading] = useState(false);
@@ -1028,6 +1048,7 @@ export default function AgentView({ onOpenDiffFiles }) {
   const abortRef = useRef(null);
   const preRequestSnapshotRef = useRef(new Map());
   const shouldAutoScrollRef = useRef(true);
+  const savedScrollPositionRef = useRef(0);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showScrollToPrevPrompt, setShowScrollToPrevPrompt] = useState(false);
   const [showScrollToNextPrompt, setShowScrollToNextPrompt] = useState(false);
@@ -1041,6 +1062,7 @@ export default function AgentView({ onOpenDiffFiles }) {
   const composerHintClearTimerRef = useRef(null);
   const reviewActionMsgTimerRef = useRef(null);
   const cloudJobStatusRef = useRef({});
+  const cloudJobStatusSeeded = useRef(false);
   const wakeLockRef = useRef(null);
   const [composerTextareaHeight, setComposerTextareaHeight] = useState(COMPOSER_MIN_HEIGHT_PX);
   const [attachments, setAttachments] = useState([]);
@@ -1283,6 +1305,22 @@ export default function AgentView({ onOpenDiffFiles }) {
     };
   }, [viewTab, streaming]);
 
+  // Save and restore scroll position when switching tabs
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    if (viewTab === 'chat') {
+      // Restore scroll position when returning to chat tab
+      requestAnimationFrame(() => {
+        el.scrollTop = savedScrollPositionRef.current;
+      });
+    } else {
+      // Save scroll position when leaving chat tab
+      savedScrollPositionRef.current = el.scrollTop;
+    }
+  }, [viewTab]);
+
   // Auto-scroll only when user is near the bottom.
   // Use immediate scroll here (not smooth) to avoid jumpy animation stacking
   // while streaming frequent deltas.
@@ -1430,7 +1468,7 @@ export default function AgentView({ onOpenDiffFiles }) {
 
   useEffect(() => {
     writeText(CHAT_VIEW_TAB_KEY, viewTab);
-    writeText(CHAT_UI_EXEC_MODE_KEY, viewTab === 'cloud' ? 'cloud' : 'chat');
+    writeText(CHAT_UI_EXEC_MODE_KEY, viewTab === 'tasks' ? 'cloud' : 'chat');
   }, [viewTab]);
 
   useEffect(() => {
@@ -1594,7 +1632,7 @@ export default function AgentView({ onOpenDiffFiles }) {
     const requestProvider = normalizeProvider(readText(CHAT_UI_PROVIDER_KEY, 'Copilot'));
     const requestExecutionMode = normalizeExecutionMode(readText(CHAT_UI_EXEC_MODE_KEY, 'Chat'));
     const runAsCloud = requestExecutionMode === 'cloud';
-    const turnId = createMessageId();
+    const turnId = createTurnCode();
     const latestPlanText = getLatestPlanResponseText(messages, turnAiModes);
     const planChoice = resolvePlanContinuationChoice(prompt);
     const outgoingPrompt = buildModeSwitchContinuationPrompt(prompt, requestAiMode, latestPlanText, planChoice);
@@ -1610,19 +1648,19 @@ export default function AgentView({ onOpenDiffFiles }) {
       scheduleDelayedScrollToBottom(120);
 
       try {
-        const created = await createCloudJob(outgoingPrompt, turnId, requestAiMode, requestProvider, currentAttachments);
+        const created = await createCloudJob(outgoingPrompt, turnId, requestAiMode, requestProvider, currentAttachments, turnId);
         setMessages((prev) => [
           ...prev,
           {
             id: createMessageId(),
             turnId,
             role: 'agent',
-            text: `Started ${providerDisplayName(requestProvider)} cloud task ${created.jobId}. You can monitor and cancel it from the Cloud tab.`,
+            text: `Started ${providerDisplayName(requestProvider)} task ${created.jobId}. You can monitor it from the Tasks tab.`,
             aiMode: requestAiMode,
             streaming: false,
           },
         ]);
-        setViewTab('cloud');
+        setViewTab('tasks');
       } catch (err) {
         setMessages((prev) => [
           ...prev,
@@ -1681,7 +1719,7 @@ export default function AgentView({ onOpenDiffFiles }) {
           autoPromotedToCloud = true;
           ctrl.abort();
 
-          createCloudJob(outgoingPrompt, turnId, requestAiMode, requestProvider, currentAttachments)
+          createCloudJob(outgoingPrompt, turnId, requestAiMode, requestProvider, currentAttachments, turnId)
             .then((created) => {
               setMessages((prev) => [
                 ...prev,
@@ -1689,12 +1727,12 @@ export default function AgentView({ onOpenDiffFiles }) {
                   id: createMessageId(),
                   turnId,
                   role: 'agent',
-                  text: `Long-running chat was promoted to ${providerDisplayName(requestProvider)} cloud task ${created.jobId}. Continue in the Cloud tab.`,
+                  text: `Long-running chat was promoted to ${providerDisplayName(requestProvider)} task ${created.jobId}. Continue in the Tasks tab.`,
                   aiMode: requestAiMode,
                   streaming: false,
                 },
               ]);
-              setViewTab('cloud');
+              setViewTab('tasks');
             })
             .catch((promoteErr) => {
               setMessages((prev) => [
@@ -1717,7 +1755,7 @@ export default function AgentView({ onOpenDiffFiles }) {
       const res = await fetch(apiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: outgoingPrompt, aiMode: requestAiMode, provider: requestProvider, attachments: currentAttachments }),
+        body: JSON.stringify({ message: outgoingPrompt, aiMode: requestAiMode, provider: requestProvider, attachments: currentAttachments, turnCode: turnId }),
         signal: ctrl.signal,
       });
 
@@ -2203,6 +2241,16 @@ export default function AgentView({ onOpenDiffFiles }) {
 
   function announceCloudStatusTransitions(nextJobs) {
     const known = cloudJobStatusRef.current;
+
+    // First poll: seed the ref with current statuses without announcing
+    if (!cloudJobStatusSeeded.current) {
+      for (const job of nextJobs) {
+        known[job.jobId] = job.status;
+      }
+      cloudJobStatusSeeded.current = true;
+      return;
+    }
+
     const updates = [];
 
     for (const job of nextJobs) {
@@ -2264,7 +2312,7 @@ export default function AgentView({ onOpenDiffFiles }) {
     return () => clearInterval(id);
   }, [fetchCloudJobs]);
 
-  async function createCloudJob(message, turnId, aiMode, provider, attachments) {
+  async function createCloudJob(message, turnId, aiMode, provider, attachments, clientJobId) {
     const r = await fetch(apiUrl('/api/jobs'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2275,6 +2323,7 @@ export default function AgentView({ onOpenDiffFiles }) {
         turnId,
         provider,
         attachments,
+        clientJobId,
       }),
     });
     const data = await r.json().catch(() => ({}));
@@ -2298,6 +2347,86 @@ export default function AgentView({ onOpenDiffFiles }) {
       setReviewActionMsg(e.message || 'Failed to cancel cloud job.');
     }
   }
+
+  // Fetch latest events for running jobs (for card progress text)
+  const fetchActiveJobEvents = useCallback(async () => {
+    const activeJobs = cloudJobs.filter((j) => j.status === 'running' || j.status === 'queued');
+    if (activeJobs.length === 0) return;
+    const updates = {};
+    for (const job of activeJobs) {
+      try {
+        const r = await fetch(apiUrl(`/api/jobs/${encodeURIComponent(job.jobId)}/events?since=0`));
+        if (!r.ok) continue;
+        const data = await r.json();
+        if (Array.isArray(data.events)) {
+          updates[job.jobId] = data.events;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      setTaskEvents((prev) => ({ ...prev, ...updates }));
+    }
+  }, [cloudJobs]);
+
+  useEffect(() => {
+    fetchActiveJobEvents();
+    const id = setInterval(fetchActiveJobEvents, 4000);
+    return () => clearInterval(id);
+  }, [fetchActiveJobEvents]);
+
+  // Submit a new task (from FAB compose modal)
+  async function handleNewTask(promptText) {
+    const turnId = createTurnCode();
+    const requestAiMode = normalizeComposerMode(aiMode);
+    const requestProvider = normalizeProvider(currentProvider);
+    setTurnAiModes((prev) => ({ ...prev, [turnId]: requestAiMode }));
+    setTurnProviders((prev) => ({ ...prev, [turnId]: requestProvider }));
+    setMessages((prev) => [...prev, { id: createMessageId(), turnId, role: 'user', text: promptText, aiMode: requestAiMode }]);
+    const created = await createCloudJob(promptText, turnId, requestAiMode, requestProvider, undefined, turnId);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: createMessageId(),
+        turnId,
+        role: 'agent',
+        text: `Started ${providerDisplayName(requestProvider)} task ${created.jobId}.`,
+        aiMode: requestAiMode,
+        streaming: false,
+      },
+    ]);
+  }
+
+  // Submit a follow-up for an existing task
+  async function handleTaskFollowUp(promptText, parentJob) {
+    const turnId = createTurnCode();
+    const requestAiMode = normalizeComposerMode(parentJob?.aiMode || aiMode);
+    const requestProvider = normalizeProvider(parentJob?.provider || currentProvider);
+    setTurnAiModes((prev) => ({ ...prev, [turnId]: requestAiMode }));
+    setTurnProviders((prev) => ({ ...prev, [turnId]: requestProvider }));
+    setMessages((prev) => [...prev, { id: createMessageId(), turnId, role: 'user', text: promptText, aiMode: requestAiMode }]);
+    const parentTurnId = parentJob?.turnId || turnId;
+    const followUpPrompt = `[Follow-up on task ${parentJob?.jobId || '?'}]\n\n${promptText}`;
+    await createCloudJob(followUpPrompt, parentTurnId, requestAiMode, requestProvider, undefined, turnId);
+    await fetchCloudJobs();
+  }
+
+  const selectedJob = useMemo(
+    () => (selectedJobId ? cloudJobs.find((j) => j.jobId === selectedJobId) : null),
+    [selectedJobId, cloudJobs]
+  );
+
+  // Count turns per parent turnId for card badges
+  const turnCountByTurnId = useMemo(() => {
+    const counts = {};
+    for (const job of cloudJobs) {
+      const key = job.turnId;
+      if (!key) continue;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    return counts;
+  }, [cloudJobs]);
 
   const reviewFileSet = new Set(pendingReviewPaths);
   const currentSignatures = useMemo(() => signatureByPath(changesSummary), [changesSummary]);
@@ -2355,7 +2484,7 @@ export default function AgentView({ onOpenDiffFiles }) {
     () => [...cloudJobs].sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0)),
     [cloudJobs]
   );
-  const composerExecutionMode = viewTab === 'cloud' ? 'cloud' : 'chat';
+  const composerExecutionMode = viewTab === 'tasks' ? 'cloud' : 'chat';
   const composerSurfaceTint = COMPOSER_EXECUTION_SURFACE_TINTS[composerExecutionMode] ?? 'var(--color-vscode-bg)';
   const composerButtonBackgroundTint = COMPOSER_EXECUTION_BUTTON_BACKGROUNDS[composerExecutionMode] ?? 'var(--color-vscode-bg)';
   const composerBorderTint = COMPOSER_BORDER_TINTS[aiMode] ?? 'var(--color-vscode-border)';
@@ -2363,7 +2492,17 @@ export default function AgentView({ onOpenDiffFiles }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-build={AGENT_VIEW_BUILD}>
-      {/* Message list */}
+      {/* Task detail view (replaces the main content when a card is tapped) */}
+      {selectedJob && viewTab === 'tasks' ? (
+        <TaskDetailView
+          job={selectedJob}
+          onBack={() => setSelectedJobId(null)}
+          onSubmitFollowUp={handleTaskFollowUp}
+          onCancel={handleCancelCloudJob}
+        />
+      ) : (
+      <>
+      {/* Tab bar + content */}
       <div className="relative min-h-0 flex-1 overflow-hidden flex flex-col">
         <div className="px-2.5 pt-2 pb-1 border-b border-vscode-border flex items-center gap-1.5 select-none justify-between">
           <div className="flex items-center gap-1.5">
@@ -2372,6 +2511,19 @@ export default function AgentView({ onOpenDiffFiles }) {
               role="tablist"
               aria-label="Agent tabs"
             >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewTab === 'tasks'}
+                onClick={() => { setViewTab('tasks'); setSelectedJobId(null); }}
+                className="px-3 py-1.5 rounded-t-lg text-xs font-medium border border-vscode-border border-b-0"
+                style={{
+                  background: viewTab === 'tasks' ? 'var(--color-vscode-tab-active)' : 'rgba(255,255,255,0.02)',
+                  color: viewTab === 'tasks' ? 'var(--color-vscode-text)' : 'var(--color-vscode-text-muted)',
+                }}
+              >
+                Tasks
+              </button>
               <button
                 type="button"
                 role="tab"
@@ -2384,19 +2536,6 @@ export default function AgentView({ onOpenDiffFiles }) {
                 }}
               >
                 Chat
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewTab === 'cloud'}
-                onClick={() => setViewTab('cloud')}
-                className="px-3 py-1.5 rounded-t-lg text-xs font-medium border border-vscode-border border-b-0"
-                style={{
-                  background: viewTab === 'cloud' ? 'var(--color-vscode-tab-active)' : 'rgba(255,255,255,0.02)',
-                  color: viewTab === 'cloud' ? 'var(--color-vscode-text)' : 'var(--color-vscode-text-muted)',
-                }}
-              >
-                Cloud
               </button>
             </div>
           </div>
@@ -2418,6 +2557,7 @@ export default function AgentView({ onOpenDiffFiles }) {
                   text={item.message.text}
                   mode={mode}
                   attachments={item.message.attachments}
+                  turnCode={item.message.turnId}
                   longPressHandlers={buildLongPressHandlers({
                     text: item.message.text,
                     allowRetry,
@@ -2471,65 +2611,53 @@ export default function AgentView({ onOpenDiffFiles }) {
         <div ref={bottomRef} />
         </div>
         ) : (
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 sm:p-4">
+        <div className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 sm:p-4">
           {sortedCloudJobs.length === 0 ? (
-            <div className="rounded-lg border border-vscode-border bg-vscode-sidebar/40 px-3 py-2 text-sm text-vscode-text-muted">
-              No cloud runs yet. Send a prompt from this tab to queue a background run.
+            <div className="flex flex-col items-center justify-center h-full text-center px-6">
+              <div className="text-vscode-text-muted text-sm mb-3">No tasks yet</div>
+              <button
+                type="button"
+                onClick={() => setComposeOpen(true)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white"
+                style={{ background: '#64c864', border: 'none', outline: 'none' }}
+              >
+                Create your first task
+              </button>
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
-              {sortedCloudJobs.map((job) => {
-                const statusColor = job.status === 'succeeded'
-                  ? '#22c55e'
-                  : job.status === 'failed'
-                    ? '#f87171'
-                    : job.status === 'cancelled'
-                      ? '#f59e0b'
-                      : '#00c8ff';
-                const canCancel = job.status === 'queued' || job.status === 'running';
-                return (
-                  <div key={job.jobId} className="rounded-lg border border-vscode-border bg-vscode-sidebar/40 px-3 py-2">
-                    <div className="flex items-center gap-2 text-xs text-vscode-text-muted">
-                      <span className="inline-block w-2 h-2 rounded-full" style={{ background: statusColor }} />
-                      <span className="px-1.5 py-0.5 rounded border border-vscode-border/70 text-[10px] uppercase">
-                        {providerDisplayName(job.provider)}
-                      </span>
-                      <span className="uppercase">{job.status}</span>
-                      <span className="ml-auto">{job.jobId}</span>
-                    </div>
-                    <div className="mt-1 text-sm text-vscode-text whitespace-pre-wrap break-words">{job.message || '(no prompt text)'}</div>
-                    {job.resultText && (
-                      <div className="mt-2 text-xs text-vscode-text-muted whitespace-pre-wrap break-words">
-                        {job.resultText}
-                      </div>
-                    )}
-                    {job.error?.message && (
-                      <div className="mt-2 text-xs text-red-400 whitespace-pre-wrap break-words">
-                        {job.error.message}
-                      </div>
-                    )}
-                    <div className="mt-2 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleCancelCloudJob(job.jobId)}
-                        disabled={!canCancel}
-                        className="px-2.5 py-1 rounded-md text-xs disabled:opacity-40 disabled:cursor-not-allowed"
-                        style={{
-                          border: '1px solid var(--color-vscode-border)',
-                          background: 'transparent',
-                          color: 'var(--color-vscode-text)',
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <span className="text-[11px] text-vscode-text-muted ml-auto">
-                        {job.updatedAt ? new Date(job.updatedAt).toLocaleTimeString() : ''}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="flex flex-col gap-2 pb-16">
+              {sortedCloudJobs.map((job) => (
+                <TaskCard
+                  key={job.jobId}
+                  job={job}
+                  turnCount={turnCountByTurnId[job.turnId] || 0}
+                  events={taskEvents[job.jobId]}
+                  onClick={() => setSelectedJobId(job.jobId)}
+                />
+              ))}
             </div>
+          )}
+
+          {/* FAB */}
+          {sortedCloudJobs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setComposeOpen(true)}
+              className="fixed right-5 bottom-24 z-[50] w-14 h-14 rounded-full shadow-xl flex items-center justify-center"
+              style={{
+                background: '#181818',
+                backdropFilter: 'blur(20px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+                border: '1px solid rgba(255,255,255,0.10)',
+                outline: 'none',
+              }}
+              title="New task"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-6 h-6" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
           )}
         </div>
         )}
@@ -2622,6 +2750,7 @@ export default function AgentView({ onOpenDiffFiles }) {
 
       </div>
 
+      {viewTab === 'chat' && (
       <form
         onSubmit={handleSend}
         className="shrink-0 border-t border-vscode-border px-2.5 sm:px-3 pt-2 pb-0"
@@ -2908,6 +3037,19 @@ export default function AgentView({ onOpenDiffFiles }) {
           )}
         </div>
       </form>
+      )}
+
+      {/* Compose modal (from FAB on tasks tab) */}
+      <ComposeModal
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        onSubmit={handleNewTask}
+        provider={currentProvider}
+        aiMode={aiMode}
+        onChangeMode={(m) => setAiMode(normalizeComposerMode(m))}
+      />
+      </>
+      )}
     </div>
   );
 }
